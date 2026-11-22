@@ -1,25 +1,47 @@
 //! Native Rust Phonon 31M inference engine wrapper using `ptts 0.7.1`.
 
+use crate::models::{ClonedVoiceMeta, QwenModelVariant};
 use crate::paths::AppPaths;
+use crate::tts::qwen_engine::QwenCloneEngine;
 use ptts::checkpoint::read_config;
 use ptts::preprocess::Lang;
 use ptts::synth::{DeviceKind, Quant, SpeechOptions, Synth, SynthBuilder};
 use std::sync::RwLock;
 
-/// Thread-safe lazy wrapper around the loaded `ptts::synth::Synth` model.
+/// Thread-safe lazy wrapper around the loaded `ptts::synth::Synth` model and Qwen3-TTS cloner.
 pub struct PhononEngine {
     synth: RwLock<Option<Synth>>,
+    qwen: QwenCloneEngine,
 }
 
 impl PhononEngine {
     pub fn new() -> Self {
         Self {
             synth: RwLock::new(None),
+            qwen: QwenCloneEngine::new(),
         }
+    }
+
+    pub fn qwen(&self) -> &QwenCloneEngine {
+        &self.qwen
     }
 
     pub fn is_loaded(&self) -> bool {
         self.synth.read().unwrap().is_some()
+    }
+
+    /// Loads whichever TTS engine is needed for `voice_id` and `qwen_variant`.
+    pub fn ensure_engine_for_voice(
+        &self,
+        paths: &AppPaths,
+        qwen_variant: QwenModelVariant,
+        voice_id: &str,
+    ) -> Result<(), String> {
+        if AppPaths::is_cloned_voice_id(voice_id) {
+            self.qwen.ensure_loaded(paths, qwen_variant)
+        } else {
+            self.ensure_loaded(paths)
+        }
     }
 
     /// Loads `gradium/phonon-31m-en` (`model.q8.gguf`) from `BookReader_Data/models/phonon-31m-en/`.
@@ -86,7 +108,20 @@ impl PhononEngine {
     }
 
     /// Synthesizes one cleaned sentence of English text into 24 kHz mono PCM.
-    pub fn synthesize(&self, paths: &AppPaths, text: &str, voice_id: &str) -> Result<Vec<f32>, String> {
+    pub fn synthesize(
+        &self,
+        paths: &AppPaths,
+        qwen_variant: QwenModelVariant,
+        cloned_meta: Option<&ClonedVoiceMeta>,
+        text: &str,
+        voice_id: &str,
+    ) -> Result<Vec<f32>, String> {
+        if AppPaths::is_cloned_voice_id(voice_id) {
+            return self
+                .qwen
+                .synthesize(paths, qwen_variant, text, voice_id, cloned_meta);
+        }
+
         let active_voice = self
             .ensure_voice_registered(paths, voice_id)
             .unwrap_or_else(|_| "default".to_string());

@@ -1,6 +1,8 @@
 //! Immediate, atomic JSON persistence in `%APPDATA%\Bookreader\`.
 
-use crate::models::{BookMeta, Bookmark, IgnoreRule, PronunciationRule, Settings};
+use crate::models::{
+    BookMeta, Bookmark, ClonedVoiceMeta, IgnoreRule, PronunciationRule, Settings, WindowState,
+};
 use crate::paths::AppPaths;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
@@ -14,6 +16,8 @@ struct StoreData {
     pronunciations: Vec<PronunciationRule>,
     ignore_rules: Vec<IgnoreRule>,
     library: Vec<BookMeta>,
+    cloned_voices: Vec<ClonedVoiceMeta>,
+    window_state: Option<WindowState>,
 }
 
 /// Thread-safe persistence layer backed by atomic JSON files in AppData.
@@ -32,6 +36,9 @@ impl Storage {
             load_or_init(&paths.pronunciations_file(), Vec::new)?;
         let ignore_rules: Vec<IgnoreRule> = load_or_init(&paths.ignore_rules_file(), Vec::new)?;
         let library: Vec<BookMeta> = load_or_init(&paths.library_file(), Vec::new)?;
+        let cloned_voices: Vec<ClonedVoiceMeta> =
+            load_or_init(&paths.cloned_voices_file(), Vec::new)?;
+        let window_state: Option<WindowState> = load_optional(&paths.window_state_file())?;
 
         Ok(Self {
             paths,
@@ -40,6 +47,8 @@ impl Storage {
                 pronunciations,
                 ignore_rules,
                 library,
+                cloned_voices,
+                window_state,
             }),
         })
     }
@@ -57,6 +66,24 @@ impl Storage {
         write_atomic(&self.paths.settings_file(), &next)?;
         self.data.write().unwrap().settings = next.clone();
         Ok(next)
+    }
+
+    pub fn window_state(&self) -> Option<WindowState> {
+        self.data
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .window_state
+            .clone()
+    }
+
+    pub fn save_window_state(&self, next: WindowState) -> Result<(), String> {
+        let mut guard = self.data.write().unwrap_or_else(|e| e.into_inner());
+        if guard.window_state.as_ref() == Some(&next) {
+            return Ok(());
+        }
+        write_atomic(&self.paths.window_state_file(), &next)?;
+        guard.window_state = Some(next);
+        Ok(())
     }
 
     pub fn pronunciations(&self) -> Vec<PronunciationRule> {
@@ -77,6 +104,39 @@ impl Storage {
         write_atomic(&self.paths.ignore_rules_file(), &rules)?;
         self.data.write().unwrap().ignore_rules = rules.clone();
         Ok(rules)
+    }
+
+    pub fn cloned_voices(&self) -> Vec<ClonedVoiceMeta> {
+        self.data
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .cloned_voices
+            .clone()
+    }
+
+    pub fn get_cloned_voice(&self, voice_id: &str) -> Option<ClonedVoiceMeta> {
+        self.data
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .cloned_voices
+            .iter()
+            .find(|v| v.voice_id == voice_id)
+            .cloned()
+    }
+
+    pub fn add_cloned_voice(&self, voice: ClonedVoiceMeta) -> Result<Vec<ClonedVoiceMeta>, String> {
+        let mut guard = self.data.write().unwrap_or_else(|e| e.into_inner());
+        guard.cloned_voices.retain(|v| v.voice_id != voice.voice_id);
+        guard.cloned_voices.insert(0, voice);
+        write_atomic(&self.paths.cloned_voices_file(), &guard.cloned_voices)?;
+        Ok(guard.cloned_voices.clone())
+    }
+
+    pub fn delete_cloned_voice(&self, voice_id: &str) -> Result<Vec<ClonedVoiceMeta>, String> {
+        let mut guard = self.data.write().unwrap_or_else(|e| e.into_inner());
+        guard.cloned_voices.retain(|v| v.voice_id != voice_id);
+        write_atomic(&self.paths.cloned_voices_file(), &guard.cloned_voices)?;
+        Ok(guard.cloned_voices.clone())
     }
 
     pub fn library(&self) -> Vec<BookMeta> {
@@ -229,6 +289,29 @@ where
     }
 }
 
+fn load_optional<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    match serde_json::from_str::<T>(&raw) {
+        Ok(val) => Ok(Some(val)),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Corrupt JSON file found; backing up and resetting to none"
+            );
+            let backup = path.with_extension("json.bak");
+            let _ = fs::copy(path, backup);
+            let _ = fs::remove_file(path);
+            Ok(None)
+        }
+    }
+}
+
 /// Atomically writes `value` as pretty JSON via a `.tmp` sibling file.
 pub fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
@@ -249,20 +332,48 @@ pub fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::QwenModelVariant;
 
     #[test]
     fn settings_and_rules_round_trip() {
         let root = std::env::temp_dir().join(format!("bookreader_store_test_{}", uuid::Uuid::new_v4()));
         let paths = AppPaths::from_roots(root.join("appdata"), root.join("data")).unwrap();
         let store = Storage::load(paths.clone()).unwrap();
+        assert!(store.window_state().is_none());
 
         let mut s = store.settings();
         s.speed = 1.38;
         s.theme = "light".to_string();
+        s.qwen_model_variant = QwenModelVariant::Fast0_6B;
         s.typography.reader_zoom = 1.4;
         s.typography.cc_font_size = 34;
         s.pdf_invert_dark = false;
         store.save_settings(s).unwrap();
+
+        let ws = WindowState {
+            x: 1960,
+            y: 80,
+            width: 1440,
+            height: 920,
+            maximized: true,
+            scale_factor: 1.5,
+            monitor_x: Some(1920),
+            monitor_y: Some(0),
+            monitor_width: Some(2560),
+            monitor_height: Some(1400),
+        };
+        store.save_window_state(ws.clone()).unwrap();
+
+        let cv = ClonedVoiceMeta {
+            voice_id: "clone_abc123".to_string(),
+            name: "My Narrator".to_string(),
+            description: "Cloned · 6.5s · ICL".to_string(),
+            ref_text: Some("Sample line".to_string()),
+            icl_mode: true,
+            duration_sec: 6.5,
+            created_at: 1700000000,
+        };
+        store.add_cloned_voice(cv.clone()).unwrap();
 
         store
             .save_ignore_rules(vec![IgnoreRule {
@@ -278,9 +389,15 @@ mod tests {
         let reloaded = Storage::load(paths).unwrap();
         assert!((reloaded.settings().speed - 1.38).abs() < 1e-4);
         assert_eq!(reloaded.settings().theme, "light");
+        assert_eq!(
+            reloaded.settings().qwen_model_variant,
+            QwenModelVariant::Fast0_6B
+        );
         assert!((reloaded.settings().typography.reader_zoom - 1.4).abs() < 1e-4);
         assert_eq!(reloaded.settings().typography.cc_font_size, 34);
         assert!(!reloaded.settings().pdf_invert_dark);
+        assert_eq!(reloaded.window_state(), Some(ws));
+        assert_eq!(reloaded.cloned_voices(), vec![cv]);
         assert_eq!(reloaded.ignore_rules().len(), 1);
         assert_eq!(reloaded.ignore_rules()[0].pattern, "[SFX]");
 

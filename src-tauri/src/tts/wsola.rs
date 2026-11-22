@@ -55,15 +55,15 @@ impl WsolaStretcher {
         let mut src_weight_acc = vec![0.0_f64; est_out_len];
 
         let mut out_pos = 0usize;
+        let mut frame_idx = 0usize;
         let mut prev_ana_pos = 0usize;
-        let mut first_frame = true;
 
         loop {
-            let ana_pos = if first_frame {
-                first_frame = false;
+            let ana_pos = if frame_idx == 0 {
                 0usize
             } else {
-                let ideal = (prev_ana_pos as f32 + (self.syn_hop as f32 * speed)).round() as isize;
+                let ideal =
+                    ((frame_idx as f64) * (self.syn_hop as f64) * (speed as f64)).round() as isize;
                 if ideal as usize + self.win_len >= input.len() {
                     break;
                 }
@@ -97,6 +97,7 @@ impl WsolaStretcher {
 
             prev_ana_pos = ana_pos;
             out_pos += self.syn_hop;
+            frame_idx += 1;
 
             if ana_pos + self.win_len >= input.len() {
                 break;
@@ -134,6 +135,11 @@ impl WsolaStretcher {
             return lo;
         }
         let target = &input[ref_start..ref_start + len];
+        let target_energy: f32 = target.iter().map(|&s| s * s).sum();
+        if target_energy < 1e-6 {
+            return ideal.clamp(lo, hi);
+        }
+
         let mut best_pos = ideal.clamp(lo, hi);
         let mut best_score = f32::NEG_INFINITY;
         let tol = self.tolerance.max(1) as f32;
@@ -146,9 +152,9 @@ impl WsolaStretcher {
                 dot += target[j] * slice[j];
                 energy += slice[j] * slice[j];
             }
-            let corr = dot / energy.sqrt();
+            let corr = dot / (target_energy * energy).sqrt();
             // Gentle tiebreaker toward `ideal` prevents locking onto `ref_start` across pitch periods
-            let dist_penalty = 0.04 * (cand.abs_diff(ideal) as f32 / tol);
+            let dist_penalty = 0.10 * (cand.abs_diff(ideal) as f32 / tol);
             let score = corr - dist_penalty;
             if score > best_score {
                 best_score = score;
@@ -180,6 +186,36 @@ mod tests {
             assert!(
                 (ratio - speed).abs() < 0.12,
                 "speed {speed} yielded ratio {ratio}"
+            );
+        }
+    }
+
+    #[test]
+    fn stretches_complex_speech_like_signal_at_1_25x_without_locking() {
+        let sr = 24_000;
+        // 2s speech-like harmonic + AM envelope + quiet pauses
+        let input: Vec<f32> = (0..sr * 2)
+            .map(|i| {
+                let t = i as f32 / sr as f32;
+                let env = if (t > 0.65 && t < 0.8) || (t > 1.35 && t < 1.5) {
+                    0.01
+                } else {
+                    0.35 * (1.0 + 0.4 * (2.0 * std::f32::consts::PI * 4.5 * t).sin())
+                };
+                let f0 = 135.0;
+                env * ((2.0 * std::f32::consts::PI * f0 * t).sin()
+                    + 0.4 * (2.0 * std::f32::consts::PI * 2.0 * f0 * t).sin())
+            })
+            .collect();
+        let stretcher = WsolaStretcher::new(sr);
+
+        for speed in [0.85_f32, 1.15, 1.25, 1.5] {
+            let (out, map) = stretcher.stretch(&input, speed);
+            assert_eq!(out.len(), map.len());
+            let ratio = input.len() as f32 / out.len() as f32;
+            assert!(
+                (ratio - speed).abs() < 0.05,
+                "speed {speed} yielded ratio {ratio} (drift!)"
             );
         }
     }

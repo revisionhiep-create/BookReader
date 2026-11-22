@@ -12,6 +12,7 @@ mod storage;
 mod text_pipeline;
 mod tts;
 mod voices;
+mod window_state;
 
 use commands::AppState;
 use downloader::DownloadManager;
@@ -53,6 +54,10 @@ pub fn run() {
             let media_keys = Arc::new(MediaKeysBridge::init(&handle, Arc::clone(&tts)));
             let sleep_timer = SleepTimer::start(handle.clone(), Arc::clone(&storage), Arc::clone(&tts));
 
+            if let Some(main_window) = app.get_webview_window("main") {
+                window_state::init_window_state(main_window, Arc::clone(&storage));
+            }
+
             app.manage(AppState {
                 storage,
                 downloader,
@@ -65,6 +70,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_bootstrap,
+            commands::get_qwen_model_status,
+            commands::set_qwen_model_variant,
+            commands::download_qwen_model,
+            commands::probe_clone_audio,
+            commands::preview_clone_slice,
+            commands::create_cloned_voice,
+            commands::delete_cloned_voice,
             commands::download_model,
             commands::download_voice,
             commands::download_all_voices,

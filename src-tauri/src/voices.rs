@@ -1,6 +1,6 @@
 //! Complete English voice catalog (37 voices) from `gradium/phonon-voices`.
 
-use crate::models::VoiceInfo;
+use crate::models::{ClonedVoiceMeta, VoiceInfo};
 use crate::paths::AppPaths;
 
 /// Static entry describing one voice in the Gradium Phonon English catalog.
@@ -329,8 +329,21 @@ pub fn voice_download_url(voice_id: &str) -> String {
     )
 }
 
-pub fn list_voices_with_status(paths: &AppPaths) -> Vec<VoiceInfo> {
+/// Picks an already-downloaded built-in fallback voice (preferring default Easton).
+pub fn pick_downloaded_fallback_voice(paths: &AppPaths) -> String {
+    const DEFAULT_VOICE_ID: &str = "LMDIYE0Oa377Qh6Z";
+    if paths.is_voice_downloaded(DEFAULT_VOICE_ID) {
+        return DEFAULT_VOICE_ID.to_string();
+    }
     EN_VOICES
+        .iter()
+        .find(|v| paths.is_voice_downloaded(v.voice_id))
+        .map(|v| v.voice_id.to_string())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+pub fn list_voices_with_status(paths: &AppPaths, cloned: &[ClonedVoiceMeta]) -> Vec<VoiceInfo> {
+    let mut out: Vec<VoiceInfo> = EN_VOICES
         .iter()
         .map(|v| VoiceInfo {
             voice_id: v.voice_id.to_string(),
@@ -340,6 +353,49 @@ pub fn list_voices_with_status(paths: &AppPaths) -> Vec<VoiceInfo> {
             age: v.age.to_string(),
             description: v.description.to_string(),
             downloaded: paths.is_voice_downloaded(v.voice_id),
+            engine: "phonon".to_string(),
+            is_cloned: false,
         })
-        .collect()
+        .collect();
+
+    for c in cloned {
+        out.push(VoiceInfo {
+            voice_id: c.voice_id.clone(),
+            name: c.name.clone(),
+            locale: "cloned".to_string(),
+            gender: "cloned".to_string(),
+            age: format!(
+                "{:.1}s · {}",
+                c.duration_sec,
+                if c.icl_mode { "ICL" } else { "X-Vector" }
+            ),
+            description: c.description.clone(),
+            downloaded: paths.is_voice_downloaded(&c.voice_id),
+            engine: "qwen_clone".to_string(),
+            is_cloned: true,
+        });
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_voice_prefers_downloaded_builtin_over_uncached_voices() {
+        let root = std::env::temp_dir().join(format!("bookreader_voice_fb_{}", uuid::Uuid::new_v4()));
+        let paths = AppPaths::from_roots(root.join("appdata"), root.join("data")).unwrap();
+
+        assert_eq!(pick_downloaded_fallback_voice(&paths), "default");
+
+        std::fs::write(paths.voice_path("NbpkqMVS3CJeq2j8").unwrap(), b"ok").unwrap();
+        assert_eq!(pick_downloaded_fallback_voice(&paths), "NbpkqMVS3CJeq2j8");
+
+        std::fs::write(paths.voice_path("LMDIYE0Oa377Qh6Z").unwrap(), b"easton").unwrap();
+        assert_eq!(pick_downloaded_fallback_voice(&paths), "LMDIYE0Oa377Qh6Z");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

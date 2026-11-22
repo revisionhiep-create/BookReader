@@ -19,7 +19,8 @@ pub fn align_words(display_text: &str, speech_pcm: &[f32], sample_rate: u32) -> 
     if words.is_empty() || total_samples == 0 {
         return Vec::new();
     }
-    if words.len() == 1 {
+    let n = words.len();
+    if n == 1 {
         return vec![WordTiming {
             word_index: 0,
             start_sample: 0,
@@ -30,52 +31,119 @@ pub fn align_words(display_text: &str, speech_pcm: &[f32], sample_rate: u32) -> 
     let weights: Vec<f64> = words.iter().map(|w| word_weight(w)).collect();
     let total_weight: f64 = weights.iter().sum::<f64>().max(1.0);
 
-    // 10 ms RMS envelope for snapping word boundaries to acoustic dips
-    let win = (sample_rate as usize / 100).max(1);
+    // 10 ms RMS envelope for detecting active speech bounds and snapping word boundaries
+    let sr = sample_rate.max(8000) as usize;
+    let win = (sr / 100).max(1);
     let mut rms_frames = Vec::with_capacity(total_samples / win + 1);
+    let mut peak_rms = 0.0_f32;
     let mut pos = 0;
     while pos < total_samples {
         let end = (pos + win).min(total_samples);
         let sum_sq: f32 = speech_pcm[pos..end].iter().map(|&s| s * s).sum();
-        rms_frames.push((sum_sq / (end - pos) as f32).sqrt());
+        let rms = (sum_sq / (end - pos) as f32).sqrt();
+        peak_rms = peak_rms.max(rms);
+        rms_frames.push(rms);
         pos = end;
     }
 
-    let search_frames = 12usize; // ±120 ms snapping window
-    let mut boundaries = Vec::with_capacity(words.len() + 1);
+    // Locate the active speech region so leading/trailing room tone doesn't skew all timings
+    let (speech_start, speech_end) = if peak_rms >= 1e-6 && !rms_frames.is_empty() {
+        let speech_thresh = (peak_rms * 0.08).max(0.006);
+        let first_f = rms_frames.iter().position(|&e| e >= speech_thresh);
+        let last_f = rms_frames.iter().rposition(|&e| e >= speech_thresh);
+        if let (Some(f0), Some(f1)) = (first_f, last_f) {
+            let s0 = f0 * win;
+            let s1 = ((f1 + 1) * win).min(total_samples);
+            if s1 > s0 && (s1 - s0) * 10 >= total_samples * 3 {
+                (s0, s1)
+            } else {
+                (0, total_samples)
+            }
+        } else {
+            (0, total_samples)
+        }
+    } else {
+        (0, total_samples)
+    };
+
+    let speech_len = speech_end.saturating_sub(speech_start);
+    if total_samples < n || speech_len < n {
+        let mut boundaries = Vec::with_capacity(n + 1);
+        boundaries.push(0usize);
+        let mut acc_w = 0.0_f64;
+        for w in weights.iter().take(n - 1) {
+            acc_w += *w;
+            let ideal = ((acc_w / total_weight) * total_samples as f64).round() as usize;
+            let prev = *boundaries.last().unwrap_or(&0);
+            boundaries.push(ideal.clamp(prev, total_samples));
+        }
+        boundaries.push(total_samples);
+        return (0..n)
+            .map(|i| WordTiming {
+                word_index: i,
+                start_sample: boundaries[i],
+                end_sample: boundaries[i + 1].max(boundaries[i]),
+            })
+            .collect();
+    }
+
+    // Strictly increasing ideal boundary points across [speech_start, speech_end]
+    let mut ideal = Vec::with_capacity(n + 1);
+    ideal.push(speech_start);
+    let mut acc_w = 0.0_f64;
+    for (idx, w) in weights.iter().enumerate().take(n - 1) {
+        acc_w += *w;
+        let raw = speech_start + ((acc_w / total_weight) * speech_len as f64).round() as usize;
+        let min_pos = *ideal.last().unwrap() + 1;
+        let max_pos = speech_end.saturating_sub(n - 1 - idx).max(min_pos);
+        ideal.push(raw.clamp(min_pos, max_pos));
+    }
+    ideal.push(speech_end);
+
+    let max_cap = (sr * 75) / 1000;
+    let mut boundaries = Vec::with_capacity(n + 1);
     boundaries.push(0usize);
 
-    let mut acc_w = 0.0_f64;
-    for (idx, w) in weights.iter().enumerate().take(words.len() - 1) {
-        acc_w += *w;
-        let ideal = ((acc_w / total_weight) * total_samples as f64).round() as usize;
-        let ideal_frame = ideal / win;
+    for k in 1..n {
+        let left_span = ideal[k].saturating_sub(ideal[k - 1]);
+        let right_span = ideal[k + 1].saturating_sub(ideal[k]);
+        let max_left = (left_span * 30 / 100).min(max_cap);
+        let max_right = (right_span * 30 / 100).min(max_cap);
+        let win_lo = ideal[k].saturating_sub(max_left);
+        let win_hi = (ideal[k] + max_right).min(total_samples);
 
-        let prev_boundary = *boundaries.last().unwrap_or(&0);
-        let remaining_words = words.len() - 1 - idx;
-        let min_sample = prev_boundary + (total_samples / (words.len() * 4)).max(1);
-        let max_sample = total_samples.saturating_sub(remaining_words * 64);
+        let snapped_center = if peak_rms >= 1e-6 && !rms_frames.is_empty() {
+            let f_hi = (win_hi / win).min(rms_frames.len() - 1);
+            let f_lo = (win_lo.saturating_sub(1) / win).min(f_hi);
+            let radius = max_left.max(max_right).max(1) as f32;
+            let mut best_pos = ideal[k];
+            let mut best_cost = f32::MAX;
 
-        let snapped = if !rms_frames.is_empty() && max_sample > min_sample {
-            let lo = ideal_frame.saturating_sub(search_frames);
-            let hi = (ideal_frame + search_frames).min(rms_frames.len() - 1);
-            let mut best_f = ideal_frame.clamp(lo, hi);
-            let mut best_e = f32::MAX;
-            for (offset, &energy) in rms_frames[lo..=hi].iter().enumerate() {
-                if energy < best_e {
-                    best_e = energy;
-                    best_f = lo + offset;
+            for (offset, &energy) in rms_frames[f_lo..=f_hi].iter().enumerate() {
+                let f = f_lo + offset;
+                let center = (f * win + win / 2).min(total_samples).clamp(win_lo, win_hi);
+                let norm_e = energy / peak_rms;
+                let dist = center.abs_diff(ideal[k]) as f32 / radius;
+                let cost = norm_e + 0.35 * dist * dist;
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_pos = center;
                 }
             }
-            (best_f * win + win / 2).clamp(min_sample, max_sample)
+            best_pos
         } else {
-            ideal.clamp(min_sample.min(total_samples), total_samples)
+            ideal[k]
         };
-        boundaries.push(snapped);
+
+        let prev_boundary = *boundaries.last().unwrap_or(&0);
+        let remaining_words = n - k;
+        let min_sample = prev_boundary + 1;
+        let max_sample = total_samples.saturating_sub(remaining_words).max(min_sample);
+        boundaries.push(snapped_center.clamp(min_sample, max_sample));
     }
     boundaries.push(total_samples);
 
-    (0..words.len())
+    (0..n)
         .map(|i| WordTiming {
             word_index: i,
             start_sample: boundaries[i],
@@ -157,5 +225,64 @@ mod tests {
         assert!(timings[0].end_sample == timings[1].start_sample);
         // Snapped inside or very near the quiet valley around 12000..14400
         assert!(timings[0].end_sample >= 11_000 && timings[0].end_sample <= 15_000);
+    }
+
+    #[test]
+    fn short_word_clusters_near_comma_pause_never_collapse() {
+        let sr = 24_000_usize;
+        let text = "Plant it in an earth vein through which spiritual energy flows, and a Spirit Stone Mine will form around that point.";
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let n = words.len();
+
+        // 5 seconds of active speech with a deep 220 ms pause after "flows,"
+        let total = sr * 5;
+        let mut pcm = vec![0.25_f32; total];
+        let pause_start = sr * 22 / 10;
+        let pause_end = pause_start + (sr * 220) / 1000;
+        pcm[pause_start..pause_end].fill(0.0005);
+
+        let timings = align_words(text, &pcm, sr as u32);
+        assert_eq!(timings.len(), n);
+        assert_eq!(timings[0].start_sample, 0);
+        assert_eq!(timings[n - 1].end_sample, total);
+
+        let weights: Vec<f64> = words.iter().map(|w| word_weight(w)).collect();
+        let total_w: f64 = weights.iter().sum();
+
+        for (i, t) in timings.iter().enumerate() {
+            assert!(t.end_sample > t.start_sample);
+            if i > 0 {
+                assert_eq!(t.start_sample, timings[i - 1].end_sample);
+            }
+            let ideal_span = (weights[i] / total_w) * total as f64;
+            let actual_span = (t.end_sample - t.start_sample) as f64;
+            assert!(
+                actual_span >= ideal_span * 0.35,
+                "word '{}' collapsed: actual={} vs ideal={:.1}",
+                words[i],
+                actual_span,
+                ideal_span
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_leading_and_trailing_room_tone_hiss() {
+        let sr = 24_000_usize;
+        let mut pcm = vec![0.015_f32; sr * 4 / 10]; // 400 ms leading room tone
+        let speech_start = pcm.len();
+        pcm.extend(std::iter::repeat_n(0.3_f32, sr)); // 1000 ms speech
+        let speech_end = pcm.len();
+        pcm.extend(std::iter::repeat_n(0.015_f32, sr * 4 / 10)); // 400 ms trailing room tone
+
+        let timings = align_words("One two three four", &pcm, sr as u32);
+        assert_eq!(timings.len(), 4);
+        for t in &timings[..3] {
+            assert!(
+                t.end_sample > speech_start && t.end_sample < speech_end,
+                "boundary {} escaped active speech ({speech_start}..{speech_end})",
+                t.end_sample
+            );
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! Async downloader for Phonon 31M weights and the 37 EN voice embeddings.
 
-use crate::models::DownloadProgressEvent;
+use crate::models::{DownloadProgressEvent, QwenModelVariant};
 use crate::paths::AppPaths;
 use crate::voices::{EN_VOICES, find_voice, voice_download_url};
 use futures_util::StreamExt;
@@ -28,6 +28,101 @@ const MODEL_FILES: &[(&str, &str)] = &[
         "https://huggingface.co/gradium/phonon-31m-en/resolve/main/model.q8.gguf",
     ),
 ];
+
+fn qwen_model_files(variant: QwenModelVariant) -> Vec<(&'static str, String, u64)> {
+    let repo = variant.hf_repo();
+    vec![
+        (
+            "config.json",
+            format!("https://huggingface.co/{repo}/resolve/main/config.json"),
+            3_000,
+        ),
+        (
+            "generation_config.json",
+            format!("https://huggingface.co/{repo}/resolve/main/generation_config.json"),
+            300,
+        ),
+        (
+            "tokenizer_config.json",
+            format!("https://huggingface.co/{repo}/resolve/main/tokenizer_config.json"),
+            5_000,
+        ),
+        (
+            "vocab.json",
+            format!("https://huggingface.co/{repo}/resolve/main/vocab.json"),
+            2_800_000,
+        ),
+        (
+            "merges.txt",
+            format!("https://huggingface.co/{repo}/resolve/main/merges.txt"),
+            1_700_000,
+        ),
+        (
+            "speech_tokenizer/config.json",
+            format!("https://huggingface.co/{repo}/resolve/main/speech_tokenizer/config.json"),
+            2_000,
+        ),
+        (
+            "speech_tokenizer/model.safetensors",
+            format!(
+                "https://huggingface.co/{repo}/resolve/main/speech_tokenizer/model.safetensors"
+            ),
+            682_000_000,
+        ),
+        (
+            "model.safetensors",
+            format!("https://huggingface.co/{repo}/resolve/main/model.safetensors"),
+            variant.model_safetensors_est_bytes(),
+        ),
+    ]
+}
+
+/// Tracks cumulative byte-weighted progress across all Qwen3-TTS model files.
+struct QwenProgressTracker {
+    file_totals: Vec<u64>,
+    completed_bytes: u64,
+}
+
+impl QwenProgressTracker {
+    fn new(estimates: Vec<u64>) -> Self {
+        Self {
+            file_totals: estimates,
+            completed_bytes: 0,
+        }
+    }
+
+    fn update_file_total(&mut self, idx: usize, actual_bytes: u64) {
+        if actual_bytes > 0
+            && let Some(slot) = self.file_totals.get_mut(idx)
+        {
+            *slot = actual_bytes;
+        }
+    }
+
+    fn total_bytes(&self) -> u64 {
+        self.file_totals.iter().copied().sum::<u64>().max(1)
+    }
+
+    fn snapshot(&self, current_file_done: u64) -> (u64, u64) {
+        let cum_done = self.completed_bytes.saturating_add(current_file_done);
+        let total = self.total_bytes().max(cum_done);
+        (cum_done.min(total), total)
+    }
+
+    fn mark_file_done(&mut self, idx: usize, actual_bytes: u64) {
+        if actual_bytes > 0
+            && let Some(slot) = self.file_totals.get_mut(idx)
+        {
+            *slot = actual_bytes;
+        }
+        let credited = if actual_bytes > 0 {
+            actual_bytes
+        } else {
+            self.file_totals.get(idx).copied().unwrap_or(0)
+        };
+        self.completed_bytes = self.completed_bytes.saturating_add(credited);
+    }
+}
 
 /// Guards against duplicate concurrent downloads of the same model or voice ID.
 pub struct DownloadManager {
@@ -104,6 +199,101 @@ impl DownloadManager {
                 current_file: "Complete".to_string(),
                 bytes_done: 1,
                 bytes_total: Some(1),
+                files_done: total_files,
+                files_total: total_files,
+                done: true,
+                error: None,
+            },
+        );
+        Ok(())
+    }
+
+    /// Downloads Qwen3-TTS (`0.6b` or `1.7b`) weights + 12Hz speech tokenizer into its variant folder.
+    pub async fn download_qwen_model(
+        &self,
+        app: &AppHandle,
+        paths: &AppPaths,
+        variant: QwenModelVariant,
+    ) -> Result<(), String> {
+        let _guard = self.acquire_slot("__qwen_model__")?;
+        let files = qwen_model_files(variant);
+        let total_files = files.len();
+        let target_dir = paths.qwen_model_dir(variant);
+        let item_id = variant.as_id();
+        let mut tracker = QwenProgressTracker::new(files.iter().map(|(_, _, est)| *est).collect());
+
+        for (idx, (rel_path, _, _)) in files.iter().enumerate() {
+            let dest = target_dir.join(rel_path);
+            if let Ok(meta) = std::fs::metadata(&dest)
+                && meta.is_file()
+                && meta.len() > 0
+            {
+                tracker.update_file_total(idx, meta.len());
+            }
+        }
+
+        let _ = app.emit(
+            "download:progress",
+            DownloadProgressEvent {
+                kind: "qwen_model".to_string(),
+                item_id: item_id.to_string(),
+                current_file: files[0].0.to_string(),
+                bytes_done: 0,
+                bytes_total: Some(tracker.total_bytes()),
+                files_done: 0,
+                files_total: total_files,
+                done: false,
+                error: None,
+            },
+        );
+
+        for (idx, (rel_path, url, _)) in files.iter().enumerate() {
+            let dest = target_dir.join(rel_path);
+            if let Ok(meta) = std::fs::metadata(&dest)
+                && meta.is_file()
+                && meta.len() > 0
+            {
+                tracker.mark_file_done(idx, meta.len());
+                let (cum_done, cum_total) = tracker.snapshot(0);
+                let _ = app.emit(
+                    "download:progress",
+                    DownloadProgressEvent {
+                        kind: "qwen_model".to_string(),
+                        item_id: item_id.to_string(),
+                        current_file: (*rel_path).to_string(),
+                        bytes_done: cum_done,
+                        bytes_total: Some(cum_total),
+                        files_done: idx,
+                        files_total: total_files,
+                        done: false,
+                        error: None,
+                    },
+                );
+                continue;
+            }
+            self.download_file_inner(
+                app,
+                "qwen_model",
+                item_id,
+                rel_path,
+                url,
+                &dest,
+                idx,
+                total_files,
+                Some(&mut tracker),
+            )
+            .await?;
+        }
+
+        let (_, cum_total) = tracker.snapshot(0);
+        let _ = app.emit(
+            "download:progress",
+            DownloadProgressEvent {
+                kind: "qwen_model".to_string(),
+                item_id: item_id.to_string(),
+                current_file: "Complete".to_string(),
+                bytes_done: cum_total,
+                bytes_total: Some(cum_total),
                 files_done: total_files,
                 files_total: total_files,
                 done: true,
@@ -236,6 +426,33 @@ impl DownloadManager {
         file_idx: usize,
         total_files: usize,
     ) -> Result<(), String> {
+        self.download_file_inner(
+            app,
+            kind,
+            item_id,
+            label,
+            url,
+            dest,
+            file_idx,
+            total_files,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn download_file_inner(
+        &self,
+        app: &AppHandle,
+        kind: &str,
+        item_id: &str,
+        label: &str,
+        url: &str,
+        dest: &Path,
+        file_idx: usize,
+        total_files: usize,
+        mut tracker: Option<&mut QwenProgressTracker>,
+    ) -> Result<(), String> {
         let resp = self
             .client
             .get(url)
@@ -246,6 +463,10 @@ impl DownloadManager {
             return Err(format!("HTTP {} downloading {label}", resp.status()));
         }
         let total_bytes = resp.content_length();
+        if let (Some(t), Some(len)) = (tracker.as_deref_mut(), total_bytes) {
+            t.update_file_total(file_idx, len);
+        }
+
         let part = dest.with_extension("part");
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
@@ -274,14 +495,20 @@ impl DownloadManager {
             }
             bytes_done += chunk.len() as u64;
             if last_emit.elapsed().as_millis() >= 80 {
+                let (emit_done, emit_total) = if let Some(t) = tracker.as_deref() {
+                    let (d, tot) = t.snapshot(bytes_done);
+                    (d, Some(tot))
+                } else {
+                    (bytes_done, total_bytes)
+                };
                 let _ = app.emit(
                     "download:progress",
                     DownloadProgressEvent {
                         kind: kind.to_string(),
                         item_id: item_id.to_string(),
                         current_file: label.to_string(),
-                        bytes_done,
-                        bytes_total: total_bytes,
+                        bytes_done: emit_done,
+                        bytes_total: emit_total,
                         files_done: file_idx,
                         files_total: total_files,
                         done: false,
@@ -302,15 +529,23 @@ impl DownloadManager {
             format!("Failed finalizing {}: {e}", dest.display())
         })?;
 
+        let (emit_done, emit_total, emit_files_done) = if let Some(t) = tracker.as_deref_mut() {
+            t.mark_file_done(file_idx, bytes_done);
+            let (d, tot) = t.snapshot(0);
+            (d, Some(tot), file_idx)
+        } else {
+            (bytes_done, total_bytes.or(Some(bytes_done)), file_idx + 1)
+        };
+
         let _ = app.emit(
             "download:progress",
             DownloadProgressEvent {
                 kind: kind.to_string(),
                 item_id: item_id.to_string(),
                 current_file: label.to_string(),
-                bytes_done,
-                bytes_total: total_bytes.or(Some(bytes_done)),
-                files_done: file_idx + 1,
+                bytes_done: emit_done,
+                bytes_total: emit_total,
+                files_done: emit_files_done,
                 files_total: total_files,
                 done: false,
                 error: None,
@@ -343,5 +578,43 @@ mod tests {
         assert!(mgr.acquire_slot("voice:Zoey").is_ok());
         drop(g1);
         assert!(mgr.acquire_slot("voice:Easton").is_ok());
+    }
+
+    #[test]
+    fn qwen_progress_tracker_stays_monotonic_across_all_eight_files() {
+        for variant in QwenModelVariant::all() {
+            let files = qwen_model_files(variant);
+            assert_eq!(files.len(), 8);
+            let mut tracker = QwenProgressTracker::new(files.iter().map(|(_, _, est)| *est).collect());
+            tracker.update_file_total(0, 2_800);
+            tracker.update_file_total(3, 2_770_000);
+
+            let mut prev_frac = 0.0_f64;
+            for (idx, (_, url, est)) in files.iter().enumerate() {
+                assert!(url.contains(variant.hf_repo()));
+                let actual = match idx {
+                    0 => 2_800,
+                    3 => 2_770_000,
+                    6 => 690_000_000,
+                    7 => *est + 2_000_000,
+                    _ => *est,
+                };
+                tracker.update_file_total(idx, actual);
+                let (d_mid, t_mid) = tracker.snapshot(actual / 2);
+                assert!(d_mid <= t_mid);
+                let frac_mid = d_mid as f64 / t_mid as f64;
+                assert!(frac_mid + 1e-6 >= prev_frac);
+                prev_frac = frac_mid;
+
+                tracker.mark_file_done(idx, actual);
+                let (d_end, t_end) = tracker.snapshot(0);
+                assert!(d_end <= t_end);
+                let frac_end = d_end as f64 / t_end as f64;
+                assert!(frac_end + 1e-6 >= prev_frac);
+                prev_frac = frac_end;
+            }
+            let (final_done, final_total) = tracker.snapshot(0);
+            assert_eq!(final_done, final_total);
+        }
     }
 }

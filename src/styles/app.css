@@ -855,8 +855,7 @@ html[data-theme="dark"] .pdf-page-card.dark-invert canvas {
   min-height: 78px;
   max-height: 220px;
   background: var(--bg-cc);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  contain: layout paint style;
   border-top: 1px solid var(--border-strong);
   padding: 16px 52px;
   display: flex;
@@ -1173,4 +1172,99 @@ html[data-theme="dark"] .pdf-page-card.dark-invert canvas {
   color: var(--text-primary);
   font-size: 12.5px;
   z-index: 90;
+}
+
+.clone-status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.clone-drop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-surface);
+}
+
+.clone-textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  border-radius: 7px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.status-pill {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+}
+
+.status-pill.ready {
+  background: var(--bg-active-pill);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.status-pill.missing {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+
+.clone-warn-text {
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+
+.clone-model-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.clone-model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  text-align: left;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.clone-model-option:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.clone-model-option.active {
+  border-color: var(--accent-muted);
+  background: var(--bg-active-pill);
+}
+
+.clone-model-option:disabled {
+  opacity: 0.6;
+  cursor: default;
 }

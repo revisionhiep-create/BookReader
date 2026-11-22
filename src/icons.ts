@@ -35,6 +35,9 @@ export const Icons = {
   exportAudio: () =>
     svg(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>`),
 
+  voiceClone: () =>
+    svg(`<rect x="9" y="3" width="6" height="10" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/>`),
+
   settings: () =>
     svg(`<line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.2" fill="var(--bg-surface)"/><circle cx="15" cy="17" r="2.2" fill="var(--bg-surface)"/>`),
 

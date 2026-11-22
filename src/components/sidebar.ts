@@ -12,6 +12,7 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
 
   const isPlaying = state.tts.status === "playing" || state.tts.status === "loading";
   const bookTitle = state.activeBook ? state.activeBook.title : "No book selected";
+  const clonedCount = state.voices.filter((v) => v.is_cloned).length;
   const exp = state.exportProgress;
   const showMiniExport =
     exp && ["preparing", "running", "finalizing"].includes(exp.status);
@@ -58,6 +59,11 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
       <button class="nav-btn" data-modal="export">
         ${Icons.exportAudio()}
         <span>Export Audio</span>
+      </button>
+      <button class="nav-btn" data-modal="voice_clone">
+        ${Icons.voiceClone()}
+        <span>Voice Cloning</span>
+        ${clonedCount > 0 ? `<span class="badge">${clonedCount}</span>` : ""}
       </button>
       <button class="nav-btn" data-modal="settings">
         ${Icons.settings()}

@@ -5,13 +5,15 @@ pub mod alignment;
 pub mod audio;
 pub mod engine;
 pub mod pauses;
+pub mod qwen_engine;
 pub mod wsola;
 
-use crate::models::{SentenceItem, TtsStateEvent};
+use crate::models::{QwenModelVariant, SentenceItem, TtsStateEvent};
+use crate::paths::AppPaths;
 use crate::storage::Storage;
 use crate::text_pipeline::{ProcessedSentence, TextPipeline};
 use crate::tts::alignment::align_words;
-use crate::tts::audio::{AudioOutput, MODEL_SAMPLE_RATE};
+use crate::tts::audio::{AudioOutput, AudioSnapshot, MODEL_SAMPLE_RATE};
 use crate::tts::engine::PhononEngine;
 use crate::tts::pauses::{apply_clause_pause_boost, compute_trailing_pause_ms, trim_and_fade};
 use std::collections::HashSet;
@@ -117,8 +119,52 @@ impl TtsController {
         self.engine.is_loaded()
     }
 
+    pub fn is_actively_playing(&self) -> bool {
+        matches!(
+            self.session.read().unwrap().transport,
+            TransportState::Playing | TransportState::Loading
+        )
+    }
+
     pub fn ensure_model_loaded(&self) -> Result<(), String> {
         self.engine.ensure_loaded(self.storage.paths())
+    }
+
+    pub fn ensure_engine_for_voice(&self, voice_id: &str) -> Result<(), String> {
+        let variant = self.storage.settings().qwen_model_variant;
+        self.engine
+            .ensure_engine_for_voice(self.storage.paths(), variant, voice_id)
+    }
+
+    pub fn ensure_qwen_loaded(&self, variant: QwenModelVariant) -> Result<(), String> {
+        self.engine.qwen().ensure_loaded(self.storage.paths(), variant)
+    }
+
+    /// Pauses playback, clears queued audio, and bumps generation (used when required model assets change).
+    pub fn pause_and_flush(&self) {
+        self.audio.set_paused(true);
+        self.audio.flush_and_bump_generation();
+        let mut s = self.session.write().unwrap();
+        s.highest_enqueued_idx = None;
+        s.in_flight_indices.clear();
+        s.preview_active = false;
+        if matches!(
+            s.transport,
+            TransportState::Playing | TransportState::Loading
+        ) {
+            s.transport = TransportState::Paused;
+            if let Some(ref bid) = s.book_id {
+                let page = s.sentences.get(s.cursor_idx).and_then(|it| it.page);
+                let _ = self.storage.update_book_progress(
+                    bid,
+                    s.cursor_idx,
+                    page,
+                    None,
+                    None,
+                    None,
+                );
+            }
+        }
     }
 
     /// Recompiles pre-TTS rules and flushes buffered future audio so changes apply right away.
@@ -343,6 +389,10 @@ impl TtsController {
 
     pub fn current_state_event(&self) -> TtsStateEvent {
         let snap = self.audio.snapshot();
+        self.build_state_event(&snap)
+    }
+
+    fn build_state_event(&self, snap: &AudioSnapshot) -> TtsStateEvent {
         let s = self.session.read().unwrap();
         let speed = self.audio.current_speed().max(0.5);
         let total_sentences = s.sentences.len();
@@ -388,12 +438,26 @@ impl TtsController {
             return Ok(());
         }
 
-        let pcm_raw = self.engine.synthesize(self.storage.paths(), &spoken, &active_voice)?;
+        let cloned_meta = AppPaths::is_cloned_voice_id(&active_voice)
+            .then(|| self.storage.get_cloned_voice(&active_voice))
+            .flatten();
+        let pcm_raw = self.engine.synthesize(
+            self.storage.paths(),
+            settings.qwen_model_variant,
+            cloned_meta.as_ref(),
+            &spoken,
+            &active_voice,
+        )?;
         let pcm = trim_and_fade(&pcm_raw, MODEL_SAMPLE_RATE);
-        if pcm.is_empty() {
-            return Ok(());
-        }
+        self.play_raw_preview_pcm(pcm);
+        Ok(())
+    }
 
+    /// Plays pre-rendered 24 kHz mono PCM through the preview slot, pausing active book narration.
+    pub fn play_raw_preview_pcm(&self, pcm: Vec<f32>) {
+        if pcm.is_empty() {
+            return;
+        }
         // Pause book playback cleanly while playing short preview
         self.pause();
         let generation = self.audio.flush_and_bump_generation();
@@ -406,7 +470,6 @@ impl TtsController {
         }
         self.audio
             .enqueue_speech(generation, 0, true, pcm, 0, Vec::new());
-        Ok(())
     }
 
     fn notify_worker(&self) {
@@ -423,6 +486,8 @@ impl TtsController {
                 let (lock, cv) = &*self.wakeup;
                 let mut guard = lock.lock().unwrap();
                 while !*guard {
+                    let target_prefetch =
+                        prefetch_target_for_voice(&self.storage.settings().voice_id);
                     let s = self.session.read().unwrap();
                     let active = matches!(
                         s.transport,
@@ -431,7 +496,7 @@ impl TtsController {
                     let snap = self.audio.snapshot();
                     let need_more = active
                         && !s.sentences.is_empty()
-                        && snap.queued_count < 2
+                        && snap.queued_count < target_prefetch
                         && s.highest_enqueued_idx
                             .map(|h| h + 1 < s.sentences.len())
                             .unwrap_or(true);
@@ -444,7 +509,8 @@ impl TtsController {
                 *guard = false;
             }
 
-            // Pick next sentence index to synthesize (current + up to 2 ahead)
+            // Pick next sentence index to synthesize (current + lookahead buffer)
+            let target_prefetch = prefetch_target_for_voice(&self.storage.settings().voice_id);
             let work = {
                 let mut s = self.session.write().unwrap();
                 if !matches!(
@@ -455,7 +521,7 @@ impl TtsController {
                     continue;
                 }
                 let snap = self.audio.snapshot();
-                if snap.queued_count >= 2 {
+                if snap.queued_count >= target_prefetch {
                     continue;
                 }
 
@@ -491,10 +557,16 @@ impl TtsController {
                     Ok((Vec::new(), pause_ms, Vec::new()))
                 }
                 ProcessedSentence::Speak(spoken_text) => {
-                    match self
-                        .engine
-                        .synthesize(self.storage.paths(), &spoken_text, &settings.voice_id)
-                    {
+                    let cloned_meta = AppPaths::is_cloned_voice_id(&settings.voice_id)
+                        .then(|| self.storage.get_cloned_voice(&settings.voice_id))
+                        .flatten();
+                    match self.engine.synthesize(
+                        self.storage.paths(),
+                        settings.qwen_model_variant,
+                        cloned_meta.as_ref(),
+                        &spoken_text,
+                        &settings.voice_id,
+                    ) {
                         Ok(raw_pcm) => {
                             let trimmed = trim_and_fade(&raw_pcm, MODEL_SAMPLE_RATE);
                             let boosted = apply_clause_pause_boost(
@@ -548,12 +620,14 @@ impl TtsController {
 
     fn run_ticker_loop(&self, app: AppHandle) {
         let mut last_persisted = Instant::now();
+        let mut last_emitted_at = Instant::now();
         let mut last_emitted_state: Option<(String, usize, usize)> = None;
 
         loop {
-            std::thread::sleep(Duration::from_millis(35));
+            std::thread::sleep(Duration::from_millis(25));
 
             let snap = self.audio.snapshot();
+            let target_prefetch = prefetch_target_for_voice(&self.storage.settings().voice_id);
             let mut should_notify_worker = false;
 
             {
@@ -590,7 +664,7 @@ impl TtsController {
                 if matches!(
                     s.transport,
                     TransportState::Playing | TransportState::Loading
-                ) && snap.queued_count < 2
+                ) && snap.queued_count < target_prefetch
                 {
                     should_notify_worker = true;
                 }
@@ -600,12 +674,15 @@ impl TtsController {
                 self.notify_worker();
             }
 
-            let evt = self.current_state_event();
+            let evt = self.build_state_event(&snap);
             let key = (evt.status.clone(), evt.sentence_idx, evt.word_idx);
             let changed = last_emitted_state.as_ref() != Some(&key);
-            if changed || matches!(evt.status.as_str(), "playing" | "loading") {
+            let heartbeat_due = matches!(evt.status.as_str(), "playing" | "loading")
+                && last_emitted_at.elapsed() >= Duration::from_millis(500);
+            if changed || heartbeat_due {
                 let _ = app.emit("tts:state", &evt);
                 last_emitted_state = Some(key);
+                last_emitted_at = Instant::now();
             }
 
             if last_persisted.elapsed() >= Duration::from_secs(2)
@@ -627,6 +704,14 @@ impl TtsController {
                 last_persisted = Instant::now();
             }
         }
+    }
+}
+
+fn prefetch_target_for_voice(voice_id: &str) -> usize {
+    if AppPaths::is_cloned_voice_id(voice_id) {
+        4
+    } else {
+        2
     }
 }
 

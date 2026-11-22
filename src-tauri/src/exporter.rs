@@ -1,6 +1,7 @@
 //! Background streaming audio exporter (WAV & MP3) with progress, ETA, cancel, and sleep prevention.
 
 use crate::models::{ExportFormat, ExportProgressEvent, ExportRequest, ExportScope, SentenceItem};
+use crate::paths::AppPaths;
 use crate::storage::Storage;
 use crate::text_pipeline::{ProcessedSentence, TextPipeline};
 use crate::tts::audio::MODEL_SAMPLE_RATE;
@@ -18,6 +19,7 @@ use tauri::{AppHandle, Emitter};
 
 struct ActiveExport {
     job_id: String,
+    voice_id: String,
     cancel: Arc<AtomicBool>,
     latest: ExportProgressEvent,
 }
@@ -44,6 +46,35 @@ impl ExportManager {
             .unwrap()
             .as_ref()
             .map(|a| a.latest.clone())
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active.lock().unwrap().as_ref().is_some_and(|existing| {
+            matches!(
+                existing.latest.status.as_str(),
+                "preparing" | "running" | "finalizing"
+            )
+        })
+    }
+
+    pub fn is_exporting_voice(&self, voice_id: &str) -> bool {
+        self.active.lock().unwrap().as_ref().is_some_and(|existing| {
+            existing.voice_id == voice_id
+                && matches!(
+                    existing.latest.status.as_str(),
+                    "preparing" | "running" | "finalizing"
+                )
+        })
+    }
+
+    pub fn is_exporting_cloned_voice(&self) -> bool {
+        self.active.lock().unwrap().as_ref().is_some_and(|existing| {
+            AppPaths::is_cloned_voice_id(&existing.voice_id)
+                && matches!(
+                    existing.latest.status.as_str(),
+                    "preparing" | "running" | "finalizing"
+                )
+        })
     }
 
     pub fn cancel(&self) -> Result<(), String> {
@@ -107,6 +138,7 @@ impl ExportManager {
             let mut guard = self.active.lock().unwrap();
             *guard = Some(ActiveExport {
                 job_id: job_id.clone(),
+                voice_id: req.voice_id.clone(),
                 cancel: Arc::clone(&cancel),
                 latest: initial.clone(),
             });
@@ -178,7 +210,13 @@ fn run_export_worker(
         let _ = app.emit("export:progress", &evt);
     };
 
-    if let Err(err) = engine.ensure_loaded(storage.paths()) {
+    let settings = storage.settings();
+    let qwen_variant = settings.qwen_model_variant;
+    let cloned_meta = AppPaths::is_cloned_voice_id(&req.voice_id)
+        .then(|| storage.get_cloned_voice(&req.voice_id))
+        .flatten();
+
+    if let Err(err) = engine.ensure_engine_for_voice(storage.paths(), qwen_variant, &req.voice_id) {
         emit_state("error", 0, None, 0.0, 0, Some(err));
         return;
     }
@@ -206,7 +244,6 @@ fn run_export_worker(
         }
     };
 
-    let settings = storage.settings();
     let pipeline = TextPipeline::compile(
         &settings.sanitizer,
         &storage.ignore_rules(),
@@ -234,7 +271,13 @@ fn run_export_worker(
                 }
             }
             ProcessedSentence::Speak(spoken_text) => {
-                match engine.synthesize(storage.paths(), &spoken_text, &req.voice_id) {
+                match engine.synthesize(
+                    storage.paths(),
+                    qwen_variant,
+                    cloned_meta.as_ref(),
+                    &spoken_text,
+                    &req.voice_id,
+                ) {
                     Ok(raw) => {
                         let trimmed = trim_and_fade(&raw, MODEL_SAMPLE_RATE);
                         let boosted = apply_clause_pause_boost(

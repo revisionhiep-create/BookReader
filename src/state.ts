@@ -44,6 +44,7 @@ export interface ClientState {
 const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   voice_id: "LMDIYE0Oa377Qh6Z",
+  qwen_model_variant: "1.7b",
   speed: 1.0,
   volume: 1.0,
   cc_enabled: true,

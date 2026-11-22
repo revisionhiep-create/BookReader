@@ -22,6 +22,11 @@ import {
   initToolbar,
   syncToolbar,
 } from "./components/toolbar";
+import {
+  prepareVoiceCloneModalOpen,
+  renderVoiceCloneModal,
+  syncVoiceCloneDownloadProgress,
+} from "./components/voice_clone_modal";
 import { renderVoicePickerModal } from "./components/voice_picker";
 import { Icons } from "./icons";
 import { persistSettings, state, subscribe } from "./state";
@@ -113,6 +118,8 @@ const pdfViewer = new PdfViewer(
 function openModal(modal: ActiveModal): void {
   if (modal === "pronunciation" || modal === "ignore") {
     resetRulesModalDraft();
+  } else if (modal === "voice_clone") {
+    prepareVoiceCloneModalOpen();
   }
   state.activeModal = modal;
   renderModal();
@@ -423,6 +430,7 @@ function renderModal(): void {
         onClose: closeModal,
         onChanged: renderChrome,
         onToast: showToast,
+        onOpenVoiceClone: () => openModal("voice_clone"),
       });
       return;
     case "toc":
@@ -437,6 +445,13 @@ function renderModal(): void {
     case "export":
       renderExportModal(modalHostEl, {
         onClose: closeModal,
+        onToast: showToast,
+      });
+      return;
+    case "voice_clone":
+      renderVoiceCloneModal(modalHostEl, {
+        onClose: closeModal,
+        onChanged: renderChrome,
         onToast: showToast,
       });
       return;
@@ -474,14 +489,13 @@ async function initApp(): Promise<void> {
       syncActiveHighlight();
       scrollCtrl.onActiveSentenceChanged(ev.payload.sentence_idx);
     }
-    if (prevSid !== ev.payload.sentence_idx || prevWord !== ev.payload.word_idx) {
-      renderCcBar(ccHostEl);
-    }
     if (
       prevSid !== ev.payload.sentence_idx ||
       prevStatus !== ev.payload.status
     ) {
       renderChrome();
+    } else if (prevWord !== ev.payload.word_idx) {
+      renderCcBar(ccHostEl);
     }
   });
 
@@ -489,6 +503,8 @@ async function initApp(): Promise<void> {
     state.downloadProgress = ev.payload;
     if (state.activeModal === "setup") {
       renderModal();
+    } else if (state.activeModal === "voice_clone" && ev.payload.kind === "qwen_model") {
+      syncVoiceCloneDownloadProgress(modalHostEl);
     }
   });
 

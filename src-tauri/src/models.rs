@@ -118,12 +118,78 @@ impl Default for TypographySettings {
     }
 }
 
+/// Selectable local Qwen3-TTS base model size for voice cloning & playback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum QwenModelVariant {
+    #[serde(rename = "0.6b")]
+    Fast0_6B,
+    #[default]
+    #[serde(rename = "1.7b")]
+    Quality1_7B,
+}
+
+impl QwenModelVariant {
+    pub fn all() -> [Self; 2] {
+        [Self::Fast0_6B, Self::Quality1_7B]
+    }
+
+    pub fn as_id(&self) -> &'static str {
+        match self {
+            Self::Fast0_6B => "0.6b",
+            Self::Quality1_7B => "1.7b",
+        }
+    }
+
+    pub fn dir_name(&self) -> &'static str {
+        match self {
+            Self::Fast0_6B => "qwen3-tts-0.6b-base",
+            Self::Quality1_7B => "qwen3-tts-1.7b-base",
+        }
+    }
+
+    pub fn hf_repo(&self) -> &'static str {
+        match self {
+            Self::Fast0_6B => "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+            Self::Quality1_7B => "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Fast0_6B => "Qwen3-TTS 0.6B-Base",
+            Self::Quality1_7B => "Qwen3-TTS 1.7B-Base",
+        }
+    }
+
+    pub fn prompt_suffix(&self) -> &'static str {
+        match self {
+            Self::Fast0_6B => "0_6b",
+            Self::Quality1_7B => "1_7b",
+        }
+    }
+
+    pub fn estimated_size_mb(&self) -> u64 {
+        match self {
+            Self::Fast0_6B => 2_560,
+            Self::Quality1_7B => 4_608,
+        }
+    }
+
+    pub fn model_safetensors_est_bytes(&self) -> u64 {
+        match self {
+            Self::Fast0_6B => 1_965_000_000,
+            Self::Quality1_7B => 3_858_000_000,
+        }
+    }
+}
+
 /// Persisted global user settings saved immediately to `%APPDATA%\Bookreader\settings.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub theme: String,
     pub voice_id: String,
+    pub qwen_model_variant: QwenModelVariant,
     pub speed: f32,
     pub volume: f32,
     pub cc_enabled: bool,
@@ -143,6 +209,7 @@ impl Default for Settings {
         Self {
             theme: "dark".to_string(),
             voice_id: "LMDIYE0Oa377Qh6Z".to_string(), // Easton (en-us male)
+            qwen_model_variant: QwenModelVariant::default(),
             speed: 1.0,
             volume: 1.0,
             cc_enabled: true,
@@ -180,6 +247,39 @@ impl Settings {
         self.typography.cc_font_size = self.typography.cc_font_size.clamp(14, 48);
         self.default_pdf_header_ignore_pct = self.default_pdf_header_ignore_pct.clamp(0.0, 0.45);
         self.default_pdf_footer_ignore_pct = self.default_pdf_footer_ignore_pct.clamp(0.0, 0.45);
+    }
+}
+
+/// Saved desktop window position, client size, and display state in physical screen pixels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowState {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub maximized: bool,
+    pub scale_factor: f64,
+    pub monitor_x: Option<i32>,
+    pub monitor_y: Option<i32>,
+    pub monitor_width: Option<u32>,
+    pub monitor_height: Option<u32>,
+}
+
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 820,
+            maximized: false,
+            scale_factor: 1.0,
+            monitor_x: None,
+            monitor_y: None,
+            monitor_width: None,
+            monitor_height: None,
+        }
     }
 }
 
@@ -340,7 +440,7 @@ pub struct DocumentPayload {
     pub html_chapters: Vec<ChapterHtml>,
 }
 
-/// Static catalog metadata + local download state for a Phonon EN voice.
+/// Catalog or custom cloned voice metadata + local availability.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VoiceInfo {
     pub voice_id: String,
@@ -350,6 +450,102 @@ pub struct VoiceInfo {
     pub age: String,
     pub description: String,
     pub downloaded: bool,
+    pub engine: String,
+    pub is_cloned: bool,
+}
+
+/// Persisted metadata for a user-created Qwen3-TTS cloned voice.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClonedVoiceMeta {
+    pub voice_id: String,
+    pub name: String,
+    pub description: String,
+    pub ref_text: Option<String>,
+    pub icl_mode: bool,
+    pub duration_sec: f32,
+    pub created_at: u64,
+}
+
+impl Default for ClonedVoiceMeta {
+    fn default() -> Self {
+        Self {
+            voice_id: String::new(),
+            name: String::new(),
+            description: String::new(),
+            ref_text: None,
+            icl_mode: false,
+            duration_sec: 0.0,
+            created_at: 0,
+        }
+    }
+}
+
+/// Duration/sample-rate inspection result for a user-selected reference audio file.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AudioClipProbe {
+    pub path: String,
+    pub filename: String,
+    pub duration_sec: f32,
+    pub sample_rate: u32,
+    pub recommended_start_sec: f32,
+    pub recommended_end_sec: f32,
+    pub status: String, // "too_short" | "optimal" | "will_trim"
+    pub message: String,
+}
+
+/// Request payload to clone a voice via Qwen3-TTS.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CloneVoiceRequest {
+    pub name: String,
+    pub audio_path: String,
+    pub ref_text: Option<String>,
+    pub trim_start_sec: Option<f32>,
+    pub trim_end_sec: Option<f32>,
+}
+
+/// Availability status for a single Qwen3-TTS base model size.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QwenVariantStatus {
+    pub variant: QwenModelVariant,
+    pub display_name: String,
+    pub model_ready: bool,
+    pub engine_loaded: bool,
+    pub model_dir: String,
+    pub estimated_size_mb: u64,
+}
+
+/// Availability and hardware execution status for Qwen3-TTS voice cloning.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QwenModelStatus {
+    pub active_variant: QwenModelVariant,
+    pub model_ready: bool,
+    pub engine_loaded: bool,
+    pub device_label: String,
+    pub model_dir: String,
+    pub estimated_size_mb: u64,
+    pub variants: Vec<QwenVariantStatus>,
+}
+
+/// Response returned after switching the active Qwen3-TTS model size.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetQwenVariantResponse {
+    pub settings: Settings,
+    pub status: QwenModelStatus,
+}
+
+/// Response returned after cloning a voice cleanly updates both catalog and metadata.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CloneVoiceResponse {
+    pub created: ClonedVoiceMeta,
+    pub voices: Vec<VoiceInfo>,
+}
+
+/// Response returned after deleting a cloned voice cleanly updates catalog and active voice.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeleteClonedVoiceResponse {
+    pub voices: Vec<VoiceInfo>,
+    pub settings: Settings,
 }
 
 /// Current runtime setup & asset availability returned to frontend on startup.
@@ -357,6 +553,9 @@ pub struct VoiceInfo {
 pub struct AppBootstrap {
     pub model_ready: bool,
     pub engine_loaded: bool,
+    pub qwen_model_variant: QwenModelVariant,
+    pub qwen_model_ready: bool,
+    pub qwen_device_label: String,
     pub appdata_dir: String,
     pub data_dir: String,
     pub settings: Settings,

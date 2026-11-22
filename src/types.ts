@@ -3,6 +3,7 @@ export type BracketMode = "strip_brackets_read_inner" | "skip_bracketed_content"
 export type BookFormat = "pdf" | "epub" | "docx" | "txt";
 export type ExportFormat = "wav" | "mp3";
 export type ExportScope = "entire_book" | "range";
+export type QwenModelVariant = "0.6b" | "1.7b";
 
 export interface PauseSettings {
   sentence_ms: number;
@@ -34,6 +35,7 @@ export interface TypographySettings {
 export interface Settings {
   theme: ThemeMode;
   voice_id: string;
+  qwen_model_variant: QwenModelVariant;
   speed: number;
   volume: number;
   cc_enabled: boolean;
@@ -130,11 +132,71 @@ export interface VoiceInfo {
   age: string;
   description: string;
   downloaded: boolean;
+  engine: "phonon" | "qwen_clone";
+  is_cloned: boolean;
+}
+
+export interface ClonedVoiceMeta {
+  voice_id: string;
+  name: string;
+  description: string;
+  ref_text: string | null;
+  icl_mode: boolean;
+  duration_sec: number;
+  created_at: number;
+}
+
+export interface AudioClipProbe {
+  path: string;
+  filename: string;
+  duration_sec: number;
+  sample_rate: number;
+  recommended_start_sec: number;
+  recommended_end_sec: number;
+  status: "too_short" | "optimal" | "will_trim";
+  message: string;
+}
+
+export interface QwenVariantStatus {
+  variant: QwenModelVariant;
+  display_name: string;
+  model_ready: boolean;
+  engine_loaded: boolean;
+  model_dir: string;
+  estimated_size_mb: number;
+}
+
+export interface QwenModelStatus {
+  active_variant: QwenModelVariant;
+  model_ready: boolean;
+  engine_loaded: boolean;
+  device_label: string;
+  model_dir: string;
+  estimated_size_mb: number;
+  variants: QwenVariantStatus[];
+}
+
+export interface SetQwenVariantResponse {
+  settings: Settings;
+  status: QwenModelStatus;
+}
+
+export interface CloneVoiceResponse {
+  created: ClonedVoiceMeta;
+  voices: VoiceInfo[];
+}
+
+export interface DeleteClonedVoiceResponse {
+  voices: VoiceInfo[];
+  settings: Settings;
 }
 
 export interface AppBootstrap {
   model_ready: boolean;
   engine_loaded: boolean;
+  qwen_model_variant: QwenModelVariant;
+  qwen_model_ready: boolean;
+  qwen_device_label: string;
   appdata_dir: string;
   data_dir: string;
   settings: Settings;
@@ -212,5 +274,6 @@ export type ActiveModal =
   | "voices"
   | "toc"
   | "export"
+  | "voice_clone"
   | "settings"
   | "setup";
