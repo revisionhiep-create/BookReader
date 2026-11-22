@@ -1,0 +1,10 @@
+target/
+src-tauri/target/
+src-tauri/gen/
+node_modules/
+dist/
+BookReader_Data/
+*.exe
+*.pdb
+.DS_Store
+Thumbs.db
