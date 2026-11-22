@@ -225,6 +225,9 @@ export interface TtsStateEvent {
   book_id: string | null;
   sentence_idx: number;
   word_idx: number;
+  playback_ms: number;
+  sentence_duration_ms: number;
+  word_starts_ms?: number[];
   total_sentences: number;
   elapsed_est_sec: number;
   remaining_est_sec: number;

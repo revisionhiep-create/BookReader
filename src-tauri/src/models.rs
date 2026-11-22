@@ -588,6 +588,10 @@ pub struct TtsStateEvent {
     pub book_id: Option<String>,
     pub sentence_idx: usize,
     pub word_idx: usize,
+    pub playback_ms: u32,
+    pub sentence_duration_ms: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_starts_ms: Option<Vec<u32>>,
     pub total_sentences: usize,
     pub elapsed_est_sec: f64,
     pub remaining_est_sec: f64,

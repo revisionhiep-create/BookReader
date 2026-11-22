@@ -389,10 +389,10 @@ impl TtsController {
 
     pub fn current_state_event(&self) -> TtsStateEvent {
         let snap = self.audio.snapshot();
-        self.build_state_event(&snap)
+        self.build_state_event(&snap, true)
     }
 
-    fn build_state_event(&self, snap: &AudioSnapshot) -> TtsStateEvent {
+    fn build_state_event(&self, snap: &AudioSnapshot, include_timings: bool) -> TtsStateEvent {
         let s = self.session.read().unwrap();
         let speed = self.audio.current_speed().max(0.5);
         let total_sentences = s.sentences.len();
@@ -413,11 +413,22 @@ impl TtsController {
             TransportState::Error(msg) => ("error".to_string(), Some(msg.clone())),
         };
 
+        let (playback_ms, sentence_duration_ms, word_starts_ms) = if snap.is_preview {
+            (0, 0, None)
+        } else {
+            let starts = (include_timings && !snap.word_starts_ms.is_empty())
+                .then(|| (*snap.word_starts_ms).clone());
+            (snap.playback_ms, snap.sentence_duration_ms, starts)
+        };
+
         TtsStateEvent {
             status,
             book_id: s.book_id.clone(),
             sentence_idx: active_idx,
             word_idx: if snap.is_preview { 0 } else { snap.word_idx },
+            playback_ms,
+            sentence_duration_ms,
+            word_starts_ms,
             total_sentences,
             elapsed_est_sec,
             remaining_est_sec,
@@ -622,9 +633,10 @@ impl TtsController {
         let mut last_persisted = Instant::now();
         let mut last_emitted_at = Instant::now();
         let mut last_emitted_state: Option<(String, usize, usize)> = None;
+        let mut last_sent_timeline: Option<(usize, u32, usize, bool)> = None;
 
         loop {
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(Duration::from_millis(20));
 
             let snap = self.audio.snapshot();
             let target_prefetch = prefetch_target_for_voice(&self.storage.settings().voice_id);
@@ -674,34 +686,66 @@ impl TtsController {
                 self.notify_worker();
             }
 
-            let evt = self.build_state_event(&snap);
-            let key = (evt.status.clone(), evt.sentence_idx, evt.word_idx);
+            let preview_evt = self.build_state_event(&snap, false);
+            let key = (
+                preview_evt.status.clone(),
+                preview_evt.sentence_idx,
+                preview_evt.word_idx,
+            );
+            let is_playing_now = preview_evt.status == "playing" && !snap.is_preview;
+            let timeline_key = (
+                preview_evt.sentence_idx,
+                snap.sentence_duration_ms,
+                snap.word_starts_ms.len(),
+                is_playing_now,
+            );
+            let timeline_changed = !snap.word_starts_ms.is_empty()
+                && !snap.is_preview
+                && last_sent_timeline.as_ref() != Some(&timeline_key);
             let changed = last_emitted_state.as_ref() != Some(&key);
-            let heartbeat_due = matches!(evt.status.as_str(), "playing" | "loading")
-                && last_emitted_at.elapsed() >= Duration::from_millis(500);
-            if changed || heartbeat_due {
+            let sync_due = matches!(preview_evt.status.as_str(), "playing" | "loading")
+                && last_emitted_at.elapsed() >= Duration::from_millis(120);
+
+            if changed || timeline_changed || sync_due {
+                let evt = if timeline_changed {
+                    last_sent_timeline = Some(timeline_key);
+                    self.build_state_event(&snap, true)
+                } else {
+                    if !is_playing_now {
+                        last_sent_timeline = None;
+                    }
+                    preview_evt
+                };
                 let _ = app.emit("tts:state", &evt);
-                last_emitted_state = Some(key);
+                last_emitted_state = Some((evt.status, evt.sentence_idx, evt.word_idx));
                 last_emitted_at = Instant::now();
             }
 
             if last_persisted.elapsed() >= Duration::from_secs(2)
-                && matches!(evt.status.as_str(), "playing")
-                && let Some(ref bid) = evt.book_id
+                && matches!(
+                    last_emitted_state.as_ref().map(|k| k.0.as_str()),
+                    Some("playing")
+                )
             {
-                let page = {
+                let cur_sid = last_emitted_state.as_ref().map(|k| k.1).unwrap_or(0);
+                let progress = {
                     let s = self.session.read().unwrap();
-                    s.sentences.get(evt.sentence_idx).and_then(|it| it.page)
+                    s.book_id.clone().map(|bid| {
+                        let page = s.sentences.get(cur_sid).and_then(|it| it.page);
+                        (bid, page)
+                    })
                 };
-                let _ = self.storage.update_book_progress(
-                    bid,
-                    evt.sentence_idx,
-                    page,
-                    None,
-                    None,
-                    None,
-                );
-                last_persisted = Instant::now();
+                if let Some((bid, page)) = progress {
+                    let _ = self.storage.update_book_progress(
+                        &bid,
+                        cur_sid,
+                        page,
+                        None,
+                        None,
+                        None,
+                    );
+                    last_persisted = Instant::now();
+                }
             }
         }
     }

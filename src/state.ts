@@ -96,6 +96,8 @@ export const state: ClientState = {
     book_id: null,
     sentence_idx: 0,
     word_idx: 0,
+    playback_ms: 0,
+    sentence_duration_ms: 0,
     total_sentences: 0,
     elapsed_est_sec: 0,
     remaining_est_sec: 0,

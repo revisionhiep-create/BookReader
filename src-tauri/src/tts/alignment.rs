@@ -28,7 +28,11 @@ pub fn align_words(display_text: &str, speech_pcm: &[f32], sample_rate: u32) -> 
         }];
     }
 
-    let weights: Vec<f64> = words.iter().map(|w| word_weight(w)).collect();
+    let weights: Vec<f64> = words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| word_weight(w, i + 1 == n))
+        .collect();
     let total_weight: f64 = weights.iter().sum::<f64>().max(1.0);
 
     // 10 ms RMS envelope for detecting active speech bounds and snapping word boundaries
@@ -107,8 +111,8 @@ pub fn align_words(display_text: &str, speech_pcm: &[f32], sample_rate: u32) -> 
     for k in 1..n {
         let left_span = ideal[k].saturating_sub(ideal[k - 1]);
         let right_span = ideal[k + 1].saturating_sub(ideal[k]);
-        let max_left = (left_span * 30 / 100).min(max_cap);
-        let max_right = (right_span * 30 / 100).min(max_cap);
+        let max_left = (left_span * 25 / 100).min(max_cap);
+        let max_right = (right_span * 25 / 100).min(max_cap);
         let win_lo = ideal[k].saturating_sub(max_left);
         let win_hi = (ideal[k] + max_right).min(total_samples);
 
@@ -171,18 +175,19 @@ pub fn word_index_at_sample(timings: &[WordTiming], sample: usize) -> usize {
     }
 }
 
-fn word_weight(word: &str) -> f64 {
+fn word_weight(word: &str, is_last: bool) -> f64 {
     let letters: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
     let syllables = estimate_syllables(&letters) as f64;
     let char_bonus = (letters.chars().count() as f64) * 0.14;
-    let punct_bonus = match word.chars().last() {
+    let stripped = word.trim_end_matches(|c: char| matches!(c, '"' | '\'' | '”' | '’' | ')' | ']'));
+    let punct_bonus = match stripped.chars().last() {
         Some(',') => 1.1,
         Some(';') | Some(':') => 1.7,
-        Some('.') | Some('!') | Some('?') => 0.8,
         Some('—') | Some('-') => 0.7,
+        Some('.') | Some('!') | Some('?') if !is_last => 0.8,
         _ => 0.0,
     };
-    (syllables + char_bonus + punct_bonus).max(0.6)
+    (syllables + char_bonus + punct_bonus).max(0.9)
 }
 
 fn estimate_syllables(alpha_word: &str) -> usize {
@@ -246,7 +251,11 @@ mod tests {
         assert_eq!(timings[0].start_sample, 0);
         assert_eq!(timings[n - 1].end_sample, total);
 
-        let weights: Vec<f64> = words.iter().map(|w| word_weight(w)).collect();
+        let weights: Vec<f64> = words
+            .iter()
+            .enumerate()
+            .map(|(i, w)| word_weight(w, i + 1 == n))
+            .collect();
         let total_w: f64 = weights.iter().sum();
 
         for (i, t) in timings.iter().enumerate() {
@@ -257,13 +266,20 @@ mod tests {
             let ideal_span = (weights[i] / total_w) * total as f64;
             let actual_span = (t.end_sample - t.start_sample) as f64;
             assert!(
-                actual_span >= ideal_span * 0.35,
+                actual_span >= ideal_span * 0.45,
                 "word '{}' collapsed: actual={} vs ideal={:.1}",
                 words[i],
                 actual_span,
                 ideal_span
             );
         }
+    }
+
+    #[test]
+    fn final_word_punctuation_does_not_steal_time_from_earlier_words() {
+        assert!((word_weight("point.", true) - word_weight("point", true)).abs() < 1e-9);
+        assert!((word_weight("\"Master!\"", true) - word_weight("Master", true)).abs() < 1e-9);
+        assert!(word_weight("scream,\"", false) > word_weight("scream", false));
     }
 
     #[test]

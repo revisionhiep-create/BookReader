@@ -4,7 +4,7 @@ import "./styles/app.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { renderCcBar } from "./components/cc_bar";
+import { renderCcBar, resetCcClockForSeek, syncCcPlaybackClock } from "./components/cc_bar";
 import { renderExportModal } from "./components/export_modal";
 import { renderLibraryModal } from "./components/library_modal";
 import { PdfViewer } from "./components/pdf_viewer";
@@ -140,8 +140,10 @@ async function jumpAndPlay(sentenceIdx: number): Promise<void> {
   state.tts.sentence_idx = clamped;
   syncActiveHighlight();
   scrollCtrl.onActiveSentenceChanged(clamped, true);
+  resetCcClockForSeek();
   try {
     state.tts = await invoke<TtsStateEvent>("tts_play_from", { sentenceIdx: clamped });
+    syncCcPlaybackClock(state.tts, ccHostEl);
     renderChrome();
   } catch (err) {
     showToast(String(err));
@@ -181,6 +183,7 @@ async function openBookById(bookId: string): Promise<void> {
     state.searchHits = [];
     state.searchFocusedSid = null;
     state.pdfMarginsEditing = false;
+    resetCcClockForSeek();
 
     const payload = await invoke<DocumentPayload>("open_book", { bookId });
     state.activeBook = payload.book;
@@ -309,6 +312,7 @@ function mountToolbarOnce(): void {
       void (async () => {
         try {
           state.tts = await invoke<TtsStateEvent>("tts_toggle_play_pause");
+          syncCcPlaybackClock(state.tts, ccHostEl);
           renderChrome();
         } catch (err) {
           showToast(String(err));
@@ -318,7 +322,9 @@ function mountToolbarOnce(): void {
     onStep: (delta) => {
       void (async () => {
         state.autoScrollEnabled = true;
+        resetCcClockForSeek();
         state.tts = await invoke<TtsStateEvent>("tts_step_sentence", { delta });
+        syncCcPlaybackClock(state.tts, ccHostEl);
         syncActiveHighlight();
         scrollCtrl.onActiveSentenceChanged(state.tts.sentence_idx, true);
         renderChrome();
@@ -485,6 +491,8 @@ async function initApp(): Promise<void> {
       showToast(ev.payload.error);
     }
 
+    syncCcPlaybackClock(ev.payload, ccHostEl);
+
     if (prevSid !== ev.payload.sentence_idx) {
       syncActiveHighlight();
       scrollCtrl.onActiveSentenceChanged(ev.payload.sentence_idx);
@@ -632,6 +640,7 @@ window.addEventListener("keydown", (e) => {
     void (async () => {
       try {
         state.tts = await invoke<TtsStateEvent>("tts_toggle_play_pause");
+        syncCcPlaybackClock(state.tts, ccHostEl);
         renderChrome();
       } catch (err) {
         showToast(String(err));
@@ -641,7 +650,9 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     void (async () => {
       state.autoScrollEnabled = true;
+      resetCcClockForSeek();
       state.tts = await invoke<TtsStateEvent>("tts_step_sentence", { delta: -1 });
+      syncCcPlaybackClock(state.tts, ccHostEl);
       syncActiveHighlight();
       scrollCtrl.onActiveSentenceChanged(state.tts.sentence_idx, true);
       renderChrome();
@@ -650,7 +661,9 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     void (async () => {
       state.autoScrollEnabled = true;
+      resetCcClockForSeek();
       state.tts = await invoke<TtsStateEvent>("tts_step_sentence", { delta: 1 });
+      syncCcPlaybackClock(state.tts, ccHostEl);
       syncActiveHighlight();
       scrollCtrl.onActiveSentenceChanged(state.tts.sentence_idx, true);
       renderChrome();
