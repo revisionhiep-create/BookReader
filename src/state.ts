@@ -39,7 +39,6 @@ export interface ClientState {
   searchFocusedSid: number | null;
   pdfMarginsEditing: boolean;
   autoScrollEnabled: boolean;
-  pdfInvertDark: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -70,10 +69,13 @@ const DEFAULT_SETTINGS: Settings = {
     line_height: 1.75,
     max_width: 780,
     pdf_zoom: 1.0,
+    reader_zoom: 1.0,
+    cc_font_size: 21,
   },
   default_pdf_header_ignore_pct: 0.06,
   default_pdf_footer_ignore_pct: 0.06,
   keep_blur_visible: true,
+  pdf_invert_dark: true,
   last_book_id: null,
 };
 
@@ -109,7 +111,6 @@ export const state: ClientState = {
   searchFocusedSid: null,
   pdfMarginsEditing: false,
   autoScrollEnabled: true,
-  pdfInvertDark: true,
 };
 
 type Listener = () => void;
@@ -126,12 +127,30 @@ export function notify(): void {
   }
 }
 
-export async function persistSettings(patch: Partial<Settings>): Promise<void> {
+let settingsRev = 0;
+let persistQueue: Promise<void> = Promise.resolve();
+
+export function persistSettings(patch: Partial<Settings>): Promise<void> {
+  const rev = ++settingsRev;
   const next: Settings = { ...state.settings, ...patch };
   state.settings = next;
   document.documentElement.setAttribute("data-theme", next.theme);
   notify();
-  state.settings = await invoke<Settings>("update_settings", { settings: next });
+
+  const task = persistQueue.then(async () => {
+    if (rev < settingsRev) return;
+    try {
+      const saved = await invoke<Settings>("update_settings", { settings: next });
+      if (rev === settingsRev) {
+        state.settings = saved;
+        document.documentElement.setAttribute("data-theme", saved.theme);
+      }
+    } catch (err) {
+      console.error("Failed to persist settings:", err);
+    }
+  });
+  persistQueue = task;
+  return task;
 }
 
 export function formatDuration(seconds: number): string {

@@ -8,6 +8,11 @@ export interface ToolbarHandlers {
   onTogglePlay: () => void;
   onStep: (delta: number) => void;
   onSeekSentence: (idx: number) => void;
+  onZoomStep: (delta: number) => void;
+  onZoomReset: () => void;
+  onTogglePdfInvert: () => void;
+  onCcSizeStep: (delta: number) => void;
+  onCcSizeReset: () => void;
   onToggleSearch: () => void;
   onToggleMarginsEdit: () => void;
   onAddBookmark: () => void;
@@ -36,6 +41,12 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
       <div class="toolbar-group">
         <button class="icon-btn" id="btn-sidebar-expand" title="Open sidebar">${Icons.sidebarToggle()}</button>
         <button class="icon-btn" id="btn-add-bookmark" title="Bookmark current position">${Icons.bookmark(false)}</button>
+        <div class="toolbar-segmented" id="grp-page-zoom" title="Page Zoom (Ctrl +/- / Ctrl+Wheel)">
+          <button class="seg-btn" id="btn-zoom-out" title="Zoom out (Ctrl+-)">${Icons.zoomOut()}</button>
+          <button class="seg-val" id="btn-zoom-reset" title="Reset page zoom to 100%">100%</button>
+          <button class="seg-btn" id="btn-zoom-in" title="Zoom in (Ctrl++)">${Icons.zoomIn()}</button>
+        </div>
+        <button class="toolbar-chip" id="btn-pdf-dark-page" title="Invert white PDF pages in dark mode">Dark Page</button>
       </div>
 
       <div class="toolbar-group">
@@ -65,6 +76,11 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
         <button class="icon-btn" id="btn-cc-toggle" title="Toggle Closed Captions">
           ${Icons.cc()}
         </button>
+        <div class="toolbar-segmented" id="grp-cc-size" title="Closed Captions Font Size">
+          <button class="seg-btn" id="btn-cc-smaller" title="Smaller captions">A-</button>
+          <button class="seg-val" id="btn-cc-size-reset" title="Reset caption size to 21px">21px</button>
+          <button class="seg-btn" id="btn-cc-larger" title="Larger captions">A+</button>
+        </div>
         <button class="icon-btn" id="btn-search-toggle" title="Search document (Ctrl+F)">
           ${Icons.search()}
         </button>
@@ -97,6 +113,11 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
     void persistSettings({ sidebar_collapsed: false });
   });
   container.querySelector("#btn-add-bookmark")?.addEventListener("click", handlers.onAddBookmark);
+  container.querySelector("#btn-zoom-out")?.addEventListener("click", () => handlers.onZoomStep(-0.1));
+  container.querySelector("#btn-zoom-reset")?.addEventListener("click", handlers.onZoomReset);
+  container.querySelector("#btn-zoom-in")?.addEventListener("click", () => handlers.onZoomStep(0.1));
+  container.querySelector("#btn-pdf-dark-page")?.addEventListener("click", handlers.onTogglePdfInvert);
+
   container.querySelector("#btn-voice-picker")?.addEventListener("click", () => {
     closeToolbarPopovers();
     handlers.onOpenModal("voices");
@@ -108,6 +129,10 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
   container.querySelector("#btn-cc-toggle")?.addEventListener("click", () => {
     void persistSettings({ cc_enabled: !state.settings.cc_enabled });
   });
+  container.querySelector("#btn-cc-smaller")?.addEventListener("click", () => handlers.onCcSizeStep(-2));
+  container.querySelector("#btn-cc-size-reset")?.addEventListener("click", handlers.onCcSizeReset);
+  container.querySelector("#btn-cc-larger")?.addEventListener("click", () => handlers.onCcSizeStep(2));
+
   container.querySelector("#btn-search-toggle")?.addEventListener("click", handlers.onToggleSearch);
   container.querySelector("#btn-margins-toggle")?.addEventListener("click", handlers.onToggleMarginsEdit);
   container.querySelector("#btn-theme-toggle")?.addEventListener("click", () => {
@@ -142,7 +167,7 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
   syncToolbar();
 }
 
-/** Updates toolbar buttons, icons, and time/progress labels in place without destroying popovers or sliders. */
+/** Updates toolbar buttons, zoom/CC readouts, icons, and progress labels in place without destroying popovers or sliders. */
 export function syncToolbar(): void {
   const container = mountedContainer;
   if (!container) return;
@@ -163,6 +188,26 @@ export function syncToolbar(): void {
   const bmBtn = container.querySelector<HTMLButtonElement>("#btn-add-bookmark");
   if (bmBtn) bmBtn.disabled = !hasBook;
 
+  const zoomGroup = container.querySelector<HTMLElement>("#grp-page-zoom");
+  const zoomLbl = container.querySelector<HTMLElement>("#btn-zoom-reset");
+  const zoomFactor = isPdf
+    ? state.settings.typography.pdf_zoom
+    : state.settings.typography.reader_zoom;
+  if (zoomGroup) {
+    zoomGroup.classList.toggle("disabled", !hasBook);
+    zoomGroup.querySelectorAll<HTMLButtonElement>("button").forEach((btn) => {
+      btn.disabled = !hasBook;
+    });
+  }
+  if (zoomLbl) zoomLbl.textContent = `${Math.round(zoomFactor * 100)}%`;
+
+  const darkPageBtn = container.querySelector<HTMLButtonElement>("#btn-pdf-dark-page");
+  if (darkPageBtn) {
+    const showDarkPage = isPdf && state.settings.theme === "dark";
+    darkPageBtn.style.display = showDarkPage ? "inline-flex" : "none";
+    darkPageBtn.classList.toggle("active", state.settings.pdf_invert_dark);
+  }
+
   const voiceBtn = container.querySelector<HTMLButtonElement>("#btn-voice-picker");
   const voiceLbl = container.querySelector<HTMLElement>("#lbl-active-voice");
   if (voiceBtn) voiceBtn.title = `Voice: ${activeVoice}`;
@@ -182,6 +227,16 @@ export function syncToolbar(): void {
   if (speedPill) speedPill.textContent = `${state.settings.speed.toFixed(2)}x`;
 
   container.querySelector("#btn-cc-toggle")?.classList.toggle("active", state.settings.cc_enabled);
+
+  const ccSizeGroup = container.querySelector<HTMLElement>("#grp-cc-size");
+  const ccSizeLbl = container.querySelector<HTMLElement>("#btn-cc-size-reset");
+  if (ccSizeGroup) {
+    ccSizeGroup.classList.toggle("disabled", !state.settings.cc_enabled);
+    ccSizeGroup.querySelectorAll<HTMLButtonElement>("button").forEach((btn) => {
+      btn.disabled = !state.settings.cc_enabled;
+    });
+  }
+  if (ccSizeLbl) ccSizeLbl.textContent = `${state.settings.typography.cc_font_size}px`;
 
   const searchBtn = container.querySelector<HTMLButtonElement>("#btn-search-toggle");
   if (searchBtn) {

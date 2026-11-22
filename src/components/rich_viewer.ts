@@ -54,9 +54,11 @@ export class RichViewer {
 
   private applyTypographyVars(el: HTMLElement): void {
     const t = state.settings.typography;
-    el.style.setProperty("--reader-font-size", `${t.font_size}px`);
+    const scaledFont = Math.round(t.font_size * t.reader_zoom);
+    const scaledWidth = Math.round(t.max_width * Math.min(1.55, Math.max(0.85, t.reader_zoom)));
+    el.style.setProperty("--reader-font-size", `${scaledFont}px`);
     el.style.setProperty("--reader-line-height", `${t.line_height}`);
-    el.style.setProperty("--reader-max-width", `${t.max_width}px`);
+    el.style.setProperty("--reader-max-width", `${scaledWidth}px`);
   }
 
   public syncHighlight(sentenceIdx: number): void {

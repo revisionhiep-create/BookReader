@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { Icons } from "../icons";
-import { persistSettings, state } from "../state";
+import { notify, persistSettings, state } from "../state";
 import type { BookMeta, SentenceItem, TocEntry } from "../types";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -56,7 +55,11 @@ export class PdfViewer {
   private pageSentences: Map<number, number[]> = new Map();
   private activeSid = -1;
   private prevSearchFocusedSid: number | null = null;
-  private pageDimensions: Array<{ width: number; height: number }> = [];
+  private basePageDimensions: Array<{ width: number; height: number }> = [];
+  private zoomTimer: number | undefined;
+  private renderGeneration = 0;
+  private activeRenderTasks: Map<number, pdfjsLib.RenderTask> = new Map();
+  private inFlightRenders: Map<number, Promise<void>> = new Map();
 
   constructor(
     container: HTMLElement,
@@ -76,6 +79,11 @@ export class PdfViewer {
   }
 
   public clear(): void {
+    if (this.zoomTimer !== undefined) {
+      window.clearTimeout(this.zoomTimer);
+      this.zoomTimer = undefined;
+    }
+    this.cancelActiveRenders();
     this.observer?.disconnect();
     this.observer = null;
     void this.pdfDoc?.cleanup();
@@ -84,11 +92,9 @@ export class PdfViewer {
     this.loadingTask = null;
     this.currentBook = null;
     this.pageWraps.clear();
-    this.renderedPages.clear();
-    this.renderingPages.clear();
     this.sentenceRects = [];
     this.pageSentences.clear();
-    this.pageDimensions = [];
+    this.basePageDimensions = [];
     this.activeSid = -1;
     this.prevSearchFocusedSid = null;
     this.container.innerHTML = "";
@@ -105,14 +111,13 @@ export class PdfViewer {
     this.pdfDoc = await this.loadingTask.promise;
 
     const numPages = this.pdfDoc.numPages;
-    this.pageDimensions = [];
-    const zoom = state.settings.typography.pdf_zoom;
+    this.basePageDimensions = [];
 
-    // Sample page sizes quickly (usually uniform across chapters, or per-page metadata)
+    // Sample unscaled (1.0x) dimensions once so future zooms resize instantaneously
     for (let p = 1; p <= numPages; p++) {
       const page = await this.pdfDoc.getPage(p);
-      const vp = page.getViewport({ scale: zoom });
-      this.pageDimensions.push({ width: vp.width, height: vp.height });
+      const vp = page.getViewport({ scale: 1.0 });
+      this.basePageDimensions.push({ width: vp.width, height: vp.height });
     }
 
     this.buildDomSkeleton();
@@ -120,20 +125,53 @@ export class PdfViewer {
     this.syncHighlight(state.tts.sentence_idx);
   }
 
-  public async rebuildForZoom(): Promise<void> {
+  public rebuildForZoom(): void {
     if (!this.pdfDoc || !this.currentBook) return;
     const zoom = state.settings.typography.pdf_zoom;
-    const numPages = this.pdfDoc.numPages;
-    this.pageDimensions = [];
-    for (let p = 1; p <= numPages; p++) {
-      const page = await this.pdfDoc.getPage(p);
-      const vp = page.getViewport({ scale: zoom });
-      this.pageDimensions.push({ width: vp.width, height: vp.height });
-    }
-    this.renderedPages.clear();
-    this.renderingPages.clear();
-    this.buildDomSkeleton();
-    this.syncHighlight(state.tts.sentence_idx);
+
+    const maxBefore = Math.max(1, this.viewport.scrollHeight - this.viewport.clientHeight);
+    const scrollFrac = this.viewport.scrollTop / maxBefore;
+
+    this.pageWraps.forEach((card, pageNum) => {
+      const base = this.basePageDimensions[pageNum - 1] ?? { width: 700, height: 950 };
+      const w = Math.round(base.width * zoom);
+      const h = Math.round(base.height * zoom);
+      card.style.width = `${w}px`;
+      card.style.height = `${h}px`;
+      const canvas = card.querySelector<HTMLCanvasElement>(".pdf-canvas");
+      if (canvas && canvas.width > 0) {
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+      }
+    });
+
+    const maxAfter = Math.max(1, this.viewport.scrollHeight - this.viewport.clientHeight);
+    this.viewport.scrollTop = Math.round(scrollFrac * maxAfter);
+
+    this.cancelActiveRenders();
+
+    if (this.zoomTimer !== undefined) window.clearTimeout(this.zoomTimer);
+    this.zoomTimer = window.setTimeout(() => {
+      this.renderVisiblePages();
+    }, 95);
+  }
+
+  public syncDarkInvert(): void {
+    this.pageWraps.forEach((card) =>
+      card.classList.toggle("dark-invert", state.settings.pdf_invert_dark),
+    );
+  }
+
+  private renderVisiblePages(): void {
+    if (!this.pdfDoc) return;
+    const vpRect = this.viewport.getBoundingClientRect();
+    const margin = 700;
+    this.pageWraps.forEach((card, p) => {
+      const r = card.getBoundingClientRect();
+      if (r.bottom >= vpRect.top - margin && r.top <= vpRect.bottom + margin) {
+        void this.renderPageCanvas(p);
+      }
+    });
   }
 
   public refreshMarginOverlayUI(): void {
@@ -144,9 +182,9 @@ export class PdfViewer {
 
   private buildDomSkeleton(): void {
     if (!this.pdfDoc || !this.currentBook) return;
+    this.cancelActiveRenders();
     this.observer?.disconnect();
     this.pageWraps.clear();
-    this.renderedPages.clear();
 
     this.container.innerHTML = "";
 
@@ -159,15 +197,18 @@ export class PdfViewer {
     stack.className = "pdf-stack";
     this.container.appendChild(stack);
 
+    const zoom = state.settings.typography.pdf_zoom;
     for (let p = 1; p <= this.pdfDoc.numPages; p++) {
-      const dim = this.pageDimensions[p - 1] ?? { width: 700, height: 950 };
+      const base = this.basePageDimensions[p - 1] ?? { width: 700, height: 950 };
       const wrap = document.createElement("div");
       wrap.className = "pdf-page-wrap";
 
       const card = document.createElement("div");
-      card.className = state.pdfInvertDark ? "pdf-page-card dark-invert" : "pdf-page-card";
-      card.style.width = `${Math.round(dim.width)}px`;
-      card.style.height = `${Math.round(dim.height)}px`;
+      card.className = state.settings.pdf_invert_dark
+        ? "pdf-page-card dark-invert"
+        : "pdf-page-card";
+      card.style.width = `${Math.round(base.width * zoom)}px`;
+      card.style.height = `${Math.round(base.height * zoom)}px`;
       card.dataset.page = String(p);
 
       const canvas = document.createElement("canvas");
@@ -236,57 +277,27 @@ export class PdfViewer {
     const anchor = this.container.querySelector<HTMLElement>("#pdf-controls-anchor");
     if (!anchor || !this.currentBook) return;
 
+    if (!state.pdfMarginsEditing) {
+      anchor.innerHTML = "";
+      return;
+    }
+
     const headerPct = Math.round(this.currentBook.pdf_header_ignore_pct * 100);
     const footerPct = Math.round(this.currentBook.pdf_footer_ignore_pct * 100);
 
-    if (!state.pdfMarginsEditing) {
-      anchor.innerHTML = `
-        <div class="pdf-toolbar-strip">
-          <button class="icon-btn" id="pdf-zoom-out" title="Zoom out">${Icons.zoomOut()}</button>
-          <span>${Math.round(state.settings.typography.pdf_zoom * 100)}%</span>
-          <button class="icon-btn" id="pdf-zoom-in" title="Zoom in">${Icons.zoomIn()}</button>
-          <span style="color:var(--border-strong);">|</span>
-          <button class="chip ${state.pdfInvertDark ? "active" : ""}" id="pdf-dark-invert" title="Invert white PDF pages in dark mode">Dark Page</button>
-          <button class="chip" id="pdf-edit-margins-btn">Ignore Margins (${headerPct}% / ${footerPct}%)</button>
-        </div>
-      `;
-    } else {
-      anchor.innerHTML = `
-        <div class="pdf-toolbar-strip" style="flex-wrap:wrap;border-radius:12px;">
-          <span><strong>Drag lines on any page</strong></span>
-          <span>Top: <strong id="lbl-hdr-pct">${headerPct}%</strong></span>
-          <span>Bottom: <strong id="lbl-ftr-pct">${footerPct}%</strong></span>
-          <label class="checkbox-label" style="font-size:12px;">
-            <input type="checkbox" id="chk-keep-blur" ${state.settings.keep_blur_visible ? "checked" : ""}/>
-            Keep blur visible
-          </label>
-          <button class="chip" id="btn-save-default-margins">Save as default</button>
-          <button class="btn-primary" style="padding:4px 10px;font-size:12px;" id="btn-margins-done">Done</button>
-        </div>
-      `;
-    }
-
-    anchor.querySelector("#pdf-zoom-out")?.addEventListener("click", async () => {
-      const next = Math.max(0.5, Number((state.settings.typography.pdf_zoom - 0.1).toFixed(2)));
-      await persistSettings({ typography: { ...state.settings.typography, pdf_zoom: next } });
-      await this.rebuildForZoom();
-    });
-    anchor.querySelector("#pdf-zoom-in")?.addEventListener("click", async () => {
-      const next = Math.min(2.5, Number((state.settings.typography.pdf_zoom + 0.1).toFixed(2)));
-      await persistSettings({ typography: { ...state.settings.typography, pdf_zoom: next } });
-      await this.rebuildForZoom();
-    });
-    anchor.querySelector("#pdf-dark-invert")?.addEventListener("click", () => {
-      state.pdfInvertDark = !state.pdfInvertDark;
-      this.pageWraps.forEach((card) =>
-        card.classList.toggle("dark-invert", state.pdfInvertDark),
-      );
-      this.renderMarginControlsBar();
-    });
-    anchor.querySelector("#pdf-edit-margins-btn")?.addEventListener("click", () => {
-      state.pdfMarginsEditing = true;
-      this.refreshMarginOverlayUI();
-    });
+    anchor.innerHTML = `
+      <div class="pdf-toolbar-strip" style="flex-wrap:wrap;border-radius:12px;">
+        <span><strong>Drag lines on any page</strong></span>
+        <span>Top: <strong id="lbl-hdr-pct">${headerPct}%</strong></span>
+        <span>Bottom: <strong id="lbl-ftr-pct">${footerPct}%</strong></span>
+        <label class="checkbox-label" style="font-size:12px;">
+          <input type="checkbox" id="chk-keep-blur" ${state.settings.keep_blur_visible ? "checked" : ""}/>
+          Keep blur visible
+        </label>
+        <button class="chip" id="btn-save-default-margins">Save as default</button>
+        <button class="btn-primary" style="padding:4px 10px;font-size:12px;" id="btn-margins-done">Done</button>
+      </div>
+    `;
 
     anchor.querySelector<HTMLInputElement>("#chk-keep-blur")?.addEventListener("change", (e) => {
       const checked = (e.target as HTMLInputElement).checked;
@@ -306,6 +317,7 @@ export class PdfViewer {
     anchor.querySelector("#btn-margins-done")?.addEventListener("click", () => {
       state.pdfMarginsEditing = false;
       this.refreshMarginOverlayUI();
+      notify();
     });
   }
 
@@ -400,41 +412,92 @@ export class PdfViewer {
     });
   }
 
+  private cancelActiveRenders(): void {
+    this.renderGeneration++;
+    for (const task of this.activeRenderTasks.values()) {
+      try {
+        task.cancel();
+      } catch {
+        // Ignore cancellation errors on tasks that already settled
+      }
+    }
+    this.activeRenderTasks.clear();
+    this.renderedPages.clear();
+    this.renderingPages.clear();
+  }
+
   private async renderPageCanvas(pageNum: number): Promise<void> {
-    if (
-      !this.pdfDoc ||
-      this.renderedPages.has(pageNum) ||
-      this.renderingPages.has(pageNum)
-    ) {
+    const doc = this.pdfDoc;
+    if (!doc || this.renderedPages.has(pageNum) || this.renderingPages.has(pageNum)) {
       return;
     }
-    const card = this.pageWraps.get(pageNum);
-    if (!card) return;
 
+    const gen = this.renderGeneration;
+    const prev = this.inFlightRenders.get(pageNum);
     this.renderingPages.add(pageNum);
-    try {
-      const page = await this.pdfDoc.getPage(pageNum);
-      const zoom = state.settings.typography.pdf_zoom;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const vp = page.getViewport({ scale: zoom * dpr });
-      const cssVp = page.getViewport({ scale: zoom });
 
-      const canvas = card.querySelector<HTMLCanvasElement>(".pdf-canvas");
-      if (!canvas) return;
-      canvas.width = Math.floor(vp.width);
-      canvas.height = Math.floor(vp.height);
-      canvas.style.width = `${Math.round(cssVp.width)}px`;
-      canvas.style.height = `${Math.round(cssVp.height)}px`;
+    let work!: Promise<void>;
+    work = (async () => {
+      try {
+        if (prev) {
+          await prev.catch(() => {});
+        }
+        if (gen !== this.renderGeneration || this.pdfDoc !== doc) return;
 
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+        const card = this.pageWraps.get(pageNum);
+        if (!card) return;
 
-      await page.render({ canvasContext: ctx, canvas, viewport: vp }).promise;
-      this.renderedPages.add(pageNum);
-      this.renderPageHighlights(pageNum);
-    } finally {
-      this.renderingPages.delete(pageNum);
-    }
+        const page = await doc.getPage(pageNum);
+        if (gen !== this.renderGeneration || this.pdfDoc !== doc) return;
+
+        const zoom = state.settings.typography.pdf_zoom;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const vp = page.getViewport({ scale: zoom * dpr });
+        const cssVp = page.getViewport({ scale: zoom });
+
+        const canvas = card.querySelector<HTMLCanvasElement>(".pdf-canvas");
+        if (!canvas) return;
+        canvas.width = Math.floor(vp.width);
+        canvas.height = Math.floor(vp.height);
+        canvas.style.width = `${Math.round(cssVp.width)}px`;
+        canvas.style.height = `${Math.round(cssVp.height)}px`;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const task = page.render({ canvasContext: ctx, canvas, viewport: vp });
+        this.activeRenderTasks.set(pageNum, task);
+        try {
+          await task.promise;
+        } catch (err: unknown) {
+          if (
+            (err instanceof Error && err.name === "RenderingCancelledException") ||
+            gen !== this.renderGeneration
+          ) {
+            return;
+          }
+          throw err;
+        } finally {
+          if (this.activeRenderTasks.get(pageNum) === task) {
+            this.activeRenderTasks.delete(pageNum);
+          }
+        }
+
+        if (gen !== this.renderGeneration || this.pdfDoc !== doc) return;
+        this.renderedPages.add(pageNum);
+        this.renderPageHighlights(pageNum);
+      } finally {
+        if (gen === this.renderGeneration) {
+          this.renderingPages.delete(pageNum);
+        }
+        if (this.inFlightRenders.get(pageNum) === work) {
+          this.inFlightRenders.delete(pageNum);
+        }
+      }
+    })();
+
+    this.inFlightRenders.set(pageNum, work);
+    await work;
   }
 
   private async extractAllSentences(preservingPos: boolean): Promise<void> {

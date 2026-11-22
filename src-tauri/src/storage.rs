@@ -259,6 +259,9 @@ mod tests {
         let mut s = store.settings();
         s.speed = 1.38;
         s.theme = "light".to_string();
+        s.typography.reader_zoom = 1.4;
+        s.typography.cc_font_size = 34;
+        s.pdf_invert_dark = false;
         store.save_settings(s).unwrap();
 
         store
@@ -275,6 +278,9 @@ mod tests {
         let reloaded = Storage::load(paths).unwrap();
         assert!((reloaded.settings().speed - 1.38).abs() < 1e-4);
         assert_eq!(reloaded.settings().theme, "light");
+        assert!((reloaded.settings().typography.reader_zoom - 1.4).abs() < 1e-4);
+        assert_eq!(reloaded.settings().typography.cc_font_size, 34);
+        assert!(!reloaded.settings().pdf_invert_dark);
         assert_eq!(reloaded.ignore_rules().len(), 1);
         assert_eq!(reloaded.ignore_rules()[0].pattern, "[SFX]");
 

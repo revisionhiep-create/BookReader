@@ -93,7 +93,7 @@ impl Default for SanitizerSettings {
     }
 }
 
-/// Reader visual typography and PDF zoom preferences.
+/// Reader visual typography and zoom preferences.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TypographySettings {
@@ -101,6 +101,8 @@ pub struct TypographySettings {
     pub line_height: f32,
     pub max_width: u32,
     pub pdf_zoom: f32,
+    pub reader_zoom: f32,
+    pub cc_font_size: u32,
 }
 
 impl Default for TypographySettings {
@@ -110,6 +112,8 @@ impl Default for TypographySettings {
             line_height: 1.75,
             max_width: 780,
             pdf_zoom: 1.0,
+            reader_zoom: 1.0,
+            cc_font_size: 21,
         }
     }
 }
@@ -130,6 +134,7 @@ pub struct Settings {
     pub default_pdf_header_ignore_pct: f32,
     pub default_pdf_footer_ignore_pct: f32,
     pub keep_blur_visible: bool,
+    pub pdf_invert_dark: bool,
     pub last_book_id: Option<String>,
 }
 
@@ -148,6 +153,7 @@ impl Default for Settings {
             default_pdf_header_ignore_pct: 0.06,
             default_pdf_footer_ignore_pct: 0.06,
             keep_blur_visible: true,
+            pdf_invert_dark: true,
             last_book_id: None,
         }
     }
@@ -170,6 +176,8 @@ impl Settings {
         self.typography.line_height = self.typography.line_height.clamp(1.2, 2.6);
         self.typography.max_width = self.typography.max_width.clamp(520, 1300);
         self.typography.pdf_zoom = self.typography.pdf_zoom.clamp(0.5, 2.5);
+        self.typography.reader_zoom = self.typography.reader_zoom.clamp(0.6, 2.2);
+        self.typography.cc_font_size = self.typography.cc_font_size.clamp(14, 48);
         self.default_pdf_header_ignore_pct = self.default_pdf_header_ignore_pct.clamp(0.0, 0.45);
         self.default_pdf_footer_ignore_pct = self.default_pdf_footer_ignore_pct.clamp(0.0, 0.45);
     }

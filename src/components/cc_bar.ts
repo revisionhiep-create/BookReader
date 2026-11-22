@@ -25,7 +25,7 @@ export function renderCcBar(container: HTMLElement): void {
 
   container.innerHTML = `
     <button class="cc-close" id="btn-cc-close" title="Hide Closed Captions">${Icons.close(14)}</button>
-    <div class="cc-text">${wordsHtml || escapeHtml(sentenceText)}</div>
+    <div class="cc-text" style="font-size:${state.settings.typography.cc_font_size}px;">${wordsHtml || escapeHtml(sentenceText)}</div>
   `;
 
   container.querySelector("#btn-cc-close")?.addEventListener("click", () => {

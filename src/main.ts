@@ -24,7 +24,7 @@ import {
 } from "./components/toolbar";
 import { renderVoicePickerModal } from "./components/voice_picker";
 import { Icons } from "./icons";
-import { state, subscribe } from "./state";
+import { persistSettings, state, subscribe } from "./state";
 import type {
   ActiveModal,
   AppBootstrap,
@@ -257,6 +257,44 @@ function renderChrome(): void {
   }
 }
 
+function applyPageZoom(nextRaw: number): void {
+  if (!state.activeBook) return;
+  const next = Math.max(0.6, Math.min(2.2, Number(nextRaw.toFixed(2))));
+  const t = state.settings.typography;
+  if (state.activeBook.format === "pdf") {
+    if (Math.abs(next - t.pdf_zoom) < 0.001) return;
+    void persistSettings({ typography: { ...t, pdf_zoom: next } });
+    pdfViewer.rebuildForZoom();
+  } else {
+    if (Math.abs(next - t.reader_zoom) < 0.001) return;
+    void persistSettings({ typography: { ...t, reader_zoom: next } });
+    richViewer.applyTypography();
+  }
+}
+
+function stepPageZoom(delta: number): void {
+  if (!state.activeBook) return;
+  const t = state.settings.typography;
+  const cur = state.activeBook.format === "pdf" ? t.pdf_zoom : t.reader_zoom;
+  applyPageZoom(cur + delta);
+}
+
+function resetPageZoom(): void {
+  applyPageZoom(1.0);
+}
+
+function togglePdfInvert(): void {
+  if (state.activeBook?.format !== "pdf") return;
+  void persistSettings({ pdf_invert_dark: !state.settings.pdf_invert_dark });
+}
+
+function applyCcSize(nextRaw: number): void {
+  const next = Math.max(14, Math.min(48, Math.round(nextRaw)));
+  const t = state.settings.typography;
+  if (next === t.cc_font_size) return;
+  void persistSettings({ typography: { ...t, cc_font_size: next } });
+}
+
 function mountToolbarOnce(): void {
   initToolbar(toolbarEl, {
     onOpenModal: openModal,
@@ -282,6 +320,11 @@ function mountToolbarOnce(): void {
     onSeekSentence: (idx) => {
       void jumpAndPlay(idx);
     },
+    onZoomStep: stepPageZoom,
+    onZoomReset: resetPageZoom,
+    onTogglePdfInvert: togglePdfInvert,
+    onCcSizeStep: (delta) => applyCcSize(state.settings.typography.cc_font_size + delta),
+    onCcSizeReset: () => applyCcSize(21),
     onToggleSearch: () => {
       state.searchOpen = !state.searchOpen;
       if (!state.searchOpen) {
@@ -490,6 +533,27 @@ document.addEventListener("click", () => {
   }
 });
 
+subscribe(() => {
+  pdfViewer.syncDarkInvert();
+});
+
+let wheelZoomAccum = 0;
+viewportEl.addEventListener(
+  "wheel",
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (!state.activeBook || state.activeModal !== null) return;
+    e.preventDefault();
+    wheelZoomAccum += -e.deltaY;
+    if (Math.abs(wheelZoomAccum) >= 50) {
+      const dir = wheelZoomAccum > 0 ? 1 : -1;
+      wheelZoomAccum = 0;
+      stepPageZoom(dir * 0.1);
+    }
+  },
+  { passive: false },
+);
+
 window.addEventListener("keydown", (e) => {
   const target = e.target as HTMLElement | null;
   const inInput =
@@ -507,6 +571,24 @@ window.addEventListener("keydown", (e) => {
       renderChrome();
     }
     return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && !inInput && state.activeModal === null && state.activeBook) {
+    if (e.key === "=" || e.key === "+") {
+      e.preventDefault();
+      stepPageZoom(0.1);
+      return;
+    }
+    if (e.key === "-" || e.key === "_") {
+      e.preventDefault();
+      stepPageZoom(-0.1);
+      return;
+    }
+    if (e.key === "0") {
+      e.preventDefault();
+      resetPageZoom();
+      return;
+    }
   }
 
   if (e.key === "Escape") {

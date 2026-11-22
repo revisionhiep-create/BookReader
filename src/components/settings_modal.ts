@@ -100,6 +100,10 @@ export function renderSettingsModal(
               <span>Line Height — <strong>${typ.line_height.toFixed(2)}</strong></span>
               <input type="range" id="set-line-height" min="1.3" max="2.3" step="0.05" value="${typ.line_height}"/>
             </div>
+            <div class="setting-row">
+              <span>Caption Font Size (CC Bar) — <strong>${typ.cc_font_size} px</strong></span>
+              <input type="range" id="set-cc-font-size" min="14" max="48" step="2" value="${typ.cc_font_size}"/>
+            </div>
           </div>
 
           <div class="setting-group">
@@ -209,6 +213,13 @@ export function renderSettingsModal(
       typography: { ...state.settings.typography, line_height: v },
     }).then(() => {
       handlers.onTypographyChanged();
+      renderSettingsModal(container, handlers);
+    });
+  });
+  bindRange("#set-cc-font-size", (v) => {
+    void persistSettings({
+      typography: { ...state.settings.typography, cc_font_size: Math.round(v) },
+    }).then(() => {
       renderSettingsModal(container, handlers);
     });
   });

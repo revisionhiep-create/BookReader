@@ -29,7 +29,14 @@ export class ScrollController {
       }
     };
 
-    this.viewport.addEventListener("wheel", markUserScroll, { passive: true });
+    this.viewport.addEventListener(
+      "wheel",
+      (e) => {
+        if (e.ctrlKey || e.metaKey) return;
+        markUserScroll();
+      },
+      { passive: true },
+    );
     this.viewport.addEventListener("touchmove", markUserScroll, { passive: true });
 
     // Scrollbar drag or clicking inside scrollbar gutter
@@ -79,7 +86,13 @@ export class ScrollController {
       state.activeBook !== null &&
       (state.tts.status === "playing" || state.tts.status === "loading" || state.tts.status === "paused");
     this.backBtn.classList.toggle("visible", show);
-    this.backBtn.classList.toggle("above-cc", state.settings.cc_enabled);
+    const ccBar = document.getElementById("cc-host");
+    if (show && state.settings.cc_enabled && ccBar && !ccBar.classList.contains("hidden")) {
+      const ccHeight = ccBar.offsetHeight || 78;
+      this.backBtn.style.bottom = `${ccHeight + 16}px`;
+    } else {
+      this.backBtn.style.bottom = "24px";
+    }
   }
 
   public resetForNewBook(): void {
