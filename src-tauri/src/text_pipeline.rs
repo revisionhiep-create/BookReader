@@ -333,12 +333,75 @@ fn normalize_and_filter_chars(s: &str, strip_non_english_symbols: bool) -> Strin
 }
 
 fn clean_orphan_punctuation(s: &str) -> String {
-    // Collapse accidental space before punctuation introduced by stripped tokens/brackets
-    let mut out = s.replace(" ,", ",").replace(" .", ".").replace(" !", "!").replace(" ?", "?").replace(" ;", ";").replace(" :", ":");
+    // Collapse accidental space before punctuation introduced by stripped tokens/brackets,
+    // then normalize expressive punctuation runs (`!!!!`, `?!`, `...!`, stray `~`) for TTS.
+    let strip_punct_spaces = |input: &str| {
+        input
+            .replace(" ,", ",")
+            .replace(" .", ".")
+            .replace(" !", "!")
+            .replace(" ?", "?")
+            .replace(" ;", ";")
+            .replace(" :", ":")
+    };
+    let mut out = strip_punct_spaces(s);
+    out = collapse_expressive_punctuation(&out);
+    out = strip_punct_spaces(&out);
     while out.contains("  ") {
         out = out.replace("  ", " ");
     }
     out.trim().to_string()
+}
+
+fn collapse_expressive_punctuation(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '.' | '!' | '?' => {
+                let mut len = 1usize;
+                let mut has_q = c == '?';
+                let mut has_excl = c == '!';
+                while let Some(&next) = chars.peek() {
+                    if matches!(next, '.' | '!' | '?') {
+                        len += 1;
+                        has_q |= next == '?';
+                        has_excl |= next == '!';
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if len == 1 {
+                    out.push(c);
+                } else if has_q {
+                    out.push('?');
+                } else if has_excl {
+                    out.push('!');
+                } else {
+                    out.push_str("...");
+                }
+            }
+            '~' => {
+                if chars.peek().is_some_and(|n| n.is_ascii_digit()) {
+                    out.push('~');
+                } else {
+                    while chars.peek() == Some(&'~') {
+                        chars.next();
+                    }
+                    if chars.peek().is_some_and(|n| n.is_ascii_digit()) {
+                        out.push('~');
+                    } else if out.chars().last().is_some_and(char::is_alphanumeric)
+                        && chars.peek().is_some_and(|n| n.is_alphanumeric())
+                    {
+                        out.push(' ');
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -428,6 +491,31 @@ mod tests {
         assert_eq!(
             out,
             ProcessedSentence::Speak("Doctor Smith had 100 title and health 50, Fuck!".to_string())
+        );
+    }
+
+    #[test]
+    fn collapses_repeated_punctuation_and_stray_tildes_for_tts() {
+        let pipe = TextPipeline::compile(&SanitizerSettings::default(), &[], &[]);
+        assert_eq!(
+            pipe.process(r#""Give me my five points back, you bastard!!!!!""#),
+            ProcessedSentence::Speak(r#""Give me my five points back, you bastard!""#.to_string())
+        );
+        assert_eq!(
+            pipe.process("Run!!!! What???? Did I win?! The results were...! Wait......"),
+            ProcessedSentence::Speak("Run! What? Did I win? The results were! Wait...".to_string())
+        );
+        assert_eq!(
+            pipe.process("Bbaam~ No~~~! Wait ~10 minutes."),
+            ProcessedSentence::Speak("Bbaam No! Wait ~10 minutes.".to_string())
+        );
+        assert_eq!(
+            pipe.process("Wait ! ! !"),
+            ProcessedSentence::Speak("Wait!".to_string())
+        );
+        assert_eq!(
+            pipe.process("Dr. Vance checked 3.14."),
+            ProcessedSentence::Speak("Dr. Vance checked 3.14.".to_string())
         );
     }
 }

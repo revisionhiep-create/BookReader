@@ -94,20 +94,20 @@ export function renderRulesModal(
                       if (isPron) {
                         const pr = r as PronunciationRule;
                         return `
-                          <div class="rule-row" data-edit-id="${pr.id}">
+                          <div class="rule-row${editingId === pr.id ? " editing" : ""}" data-edit-id="${pr.id}">
                             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(pr.source)}</span>
                             <span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(pr.replace)}</span>
                             <div class="rule-flags">${flags}</div>
-                            <input type="checkbox" class="rule-select" data-rid="${pr.id}" ${checked} />
+                            <input type="checkbox" class="rule-select" data-rid="${pr.id}" title="Select for deletion" aria-label="Select rule to delete" ${checked} />
                           </div>
                         `;
                       } else {
                         const ig = r as IgnoreRule;
                         return `
-                          <div class="rule-row ignore-mode" data-edit-id="${ig.id}">
+                          <div class="rule-row ignore-mode${editingId === ig.id ? " editing" : ""}" data-edit-id="${ig.id}">
                             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ig.pattern)}</span>
                             <div class="rule-flags">${flags}</div>
-                            <input type="checkbox" class="rule-select" data-rid="${ig.id}" ${checked} />
+                            <input type="checkbox" class="rule-select" data-rid="${ig.id}" title="Select for deletion" aria-label="Select rule to delete" ${checked} />
                           </div>
                         `;
                       }
@@ -125,7 +125,7 @@ export function renderRulesModal(
                 ? `
               <div class="replace-wrap">
                 <input type="text" id="draft-replace" placeholder="replace" value="${escapeAttr(draftReplace)}" />
-                <button class="inline-play-btn" id="btn-preview-pron" title="Preview spoken replacement with Phonon">${Icons.play(11)}</button>
+                <button class="inline-play-btn" id="btn-preview-pron" title="Preview replacement with active voice">${Icons.play(11)}</button>
               </div>
             `
                 : ""
@@ -148,6 +148,11 @@ export function renderRulesModal(
               <span>Use Regex</span>
             </label>
           </div>
+          <div class="rules-hint">${
+            editingId
+              ? "Editing rule — click Update to apply changes. All saved rules are active automatically."
+              : "All saved rules are active. Click a row to edit, or check boxes on the right to delete."
+          }</div>
           ${validationError ? `<div class="error-text">${escapeHtml(validationError)}</div>` : ""}
         </div>
       </div>
@@ -296,17 +301,28 @@ export function renderRulesModal(
       });
     }
 
+    const wasEditing = editingId !== null;
     editingId = null;
     draftSource = "";
     draftReplace = "";
     validationError = "";
     handlers.onUpdated();
     renderRulesModal(container, mode, handlers);
+    handlers.onToast(wasEditing ? "Rule updated" : "Rule added");
   };
 
   container.querySelector("#btn-save-rule")?.addEventListener("click", () => {
     void saveRule();
   });
+
+  const handleDraftEnter = (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void saveRule();
+    }
+  };
+  container.querySelector<HTMLInputElement>("#draft-source")?.addEventListener("keydown", handleDraftEnter);
+  container.querySelector<HTMLInputElement>("#draft-replace")?.addEventListener("keydown", handleDraftEnter);
 
   container.querySelector("#btn-rules-delete")?.addEventListener("click", async () => {
     if (selectedIds.size === 0) return;

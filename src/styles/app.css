@@ -1010,6 +1010,17 @@ html[data-theme="dark"] .pdf-page-card.dark-invert canvas {
   background: var(--bg-hover);
 }
 
+.rule-row.editing {
+  background: var(--bg-hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.rules-hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
 .rule-flags {
   display: flex;
   gap: 4px;
