@@ -14,7 +14,7 @@ import { ScrollController } from "./components/scroll_controller";
 import { renderSearchBar } from "./components/search_bar";
 import { renderSettingsModal } from "./components/settings_modal";
 import { renderSetupModal } from "./components/setup_modal";
-import { renderSidebar } from "./components/sidebar";
+import { escapeHtml, renderSidebar } from "./components/sidebar";
 import { renderTocBookmarksModal } from "./components/toc_bookmarks";
 import {
   closeToolbarPopovers,
@@ -48,6 +48,7 @@ root.innerHTML = `
     <main class="main-col">
       <header id="toolbar-host"></header>
       <div id="search-host" style="display:none;"></div>
+      <div id="loading-banner" class="loading-banner hidden" role="status" aria-live="polite"></div>
       <div id="reader-viewport" class="reader-viewport">
         <div id="viewer-host" style="width:100%;display:flex;flex-direction:column;align-items:center;"></div>
       </div>
@@ -62,12 +63,41 @@ root.innerHTML = `
 const sidebarEl = document.getElementById("sidebar")!;
 const toolbarEl = document.getElementById("toolbar-host")!;
 const searchEl = document.getElementById("search-host")!;
+const loadingBannerEl = document.getElementById("loading-banner")!;
 const viewportEl = document.getElementById("reader-viewport")!;
 const viewerHostEl = document.getElementById("viewer-host")!;
 const backBtnEl = document.getElementById("back-to-reading-btn") as HTMLButtonElement;
 const ccHostEl = document.getElementById("cc-host")!;
 const modalHostEl = document.getElementById("modal-host")!;
 const toastHostEl = document.getElementById("toast-host")!;
+
+let busyLoadingMessage: string | null = null;
+let lastBannerMessage: string | null = null;
+
+function syncLoadingBanner(): void {
+  let msg: string | null = null;
+  if (busyLoadingMessage !== null) {
+    msg = busyLoadingMessage;
+  } else if (state.tts.status === "loading") {
+    msg = state.settings.voice_id.startsWith("cloned:")
+      ? "Warming up Qwen3-TTS voice model, please wait..."
+      : "Warming up voice model and preparing audio, please wait...";
+  }
+  if (msg === lastBannerMessage) return;
+  lastBannerMessage = msg;
+  if (msg === null) {
+    loadingBannerEl.classList.add("hidden");
+    loadingBannerEl.innerHTML = "";
+  } else {
+    loadingBannerEl.classList.remove("hidden");
+    loadingBannerEl.innerHTML = `<span class="loading-spinner" aria-hidden="true"></span><span>${escapeHtml(msg)}</span>`;
+  }
+}
+
+function setBusyLoading(msg: string | null): void {
+  busyLoadingMessage = msg;
+  syncLoadingBanner();
+}
 
 let toastTimer: number | undefined;
 function showToast(msg: string): void {
@@ -90,28 +120,26 @@ const pdfViewer = new PdfViewer(
   (sid) => {
     void jumpAndPlay(sid);
   },
-  (sentences, toc, cursorIdx, preserving) => {
-    void (async () => {
-      state.sentences = sentences;
-      state.toc = toc;
-      state.tts.sentence_idx = cursorIdx;
-      state.tts.total_sentences = sentences.length;
-      if (state.activeBook) {
-        const updated = await invoke<BookMeta>("set_pdf_sentences", {
-          bookId: state.activeBook.id,
-          sentences,
-          cursorIdx,
-          preserving,
-        });
-        state.activeBook = updated;
-        state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
-      }
-      renderChrome();
-      pdfViewer.syncHighlight(cursorIdx);
-      if (!preserving) {
-        window.setTimeout(() => scrollCtrl.onActiveSentenceChanged(cursorIdx, true), 120);
-      }
-    })();
+  async (sentences, toc, cursorIdx, preserving) => {
+    state.sentences = sentences;
+    state.toc = toc;
+    state.tts.sentence_idx = cursorIdx;
+    state.tts.total_sentences = sentences.length;
+    if (state.activeBook) {
+      const updated = await invoke<BookMeta>("set_pdf_sentences", {
+        bookId: state.activeBook.id,
+        sentences,
+        cursorIdx,
+        preserving,
+      });
+      state.activeBook = updated;
+      state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
+    }
+    renderChrome();
+    pdfViewer.syncHighlight(cursorIdx);
+    if (!preserving) {
+      scrollCtrl.onActiveSentenceChanged(cursorIdx, true, true);
+    }
   },
 );
 
@@ -177,6 +205,7 @@ function syncActiveHighlight(): void {
 }
 
 async function openBookById(bookId: string): Promise<void> {
+  setBusyLoading("Loading book and restoring your last reading position, please wait...");
   try {
     state.searchOpen = false;
     state.searchQuery = "";
@@ -198,7 +227,7 @@ async function openBookById(bookId: string): Promise<void> {
       state.toc = [];
       state.htmlChapters = [];
       renderChrome();
-      await pdfViewer.mountPdf(payload.book);
+      await pdfViewer.mountPdf(payload.book, (msg) => setBusyLoading(msg));
     } else {
       pdfViewer.clear();
       state.sentences = payload.sentences;
@@ -209,13 +238,12 @@ async function openBookById(bookId: string): Promise<void> {
       state.tts.word_idx = 0;
       richViewer.mountDocument(payload);
       renderChrome();
-      window.setTimeout(
-        () => scrollCtrl.onActiveSentenceChanged(payload.book.current_sentence_idx, true),
-        60,
-      );
+      scrollCtrl.onActiveSentenceChanged(payload.book.current_sentence_idx, true, true);
     }
   } catch (err) {
     showToast(`Failed opening book: ${String(err)}`);
+  } finally {
+    setBusyLoading(null);
   }
 }
 
@@ -261,6 +289,7 @@ function renderChrome(): void {
   syncToolbar();
 
   renderCcBar(ccHostEl);
+  syncLoadingBanner();
   scrollCtrl.syncBackButton();
   if (!state.activeBook) {
     renderEmptyWelcome();
@@ -471,7 +500,23 @@ function renderModal(): void {
 }
 
 async function initApp(): Promise<void> {
-  const boot = await invoke<AppBootstrap>("get_bootstrap");
+  setBusyLoading("Warming up voice model and loading library, please wait...");
+  viewerHostEl.innerHTML = `
+    <div class="pdf-loading-card">
+      <span class="loading-spinner" aria-hidden="true"></span>
+      <span>Warming up voice model and loading your last book, please wait...</span>
+    </div>
+  `;
+
+  let boot: AppBootstrap;
+  try {
+    boot = await invoke<AppBootstrap>("get_bootstrap");
+  } catch (err) {
+    setBusyLoading(null);
+    showToast(`Startup failed: ${String(err)}`);
+    throw err;
+  }
+
   state.bootstrap = boot;
   state.settings = boot.settings;
   state.library = boot.library;
@@ -493,6 +538,9 @@ async function initApp(): Promise<void> {
 
     syncCcPlaybackClock(ev.payload, ccHostEl);
 
+    if (prevStatus !== ev.payload.status) {
+      syncLoadingBanner();
+    }
     if (prevSid !== ev.payload.sentence_idx) {
       syncActiveHighlight();
       scrollCtrl.onActiveSentenceChanged(ev.payload.sentence_idx);
@@ -539,15 +587,26 @@ async function initApp(): Promise<void> {
   });
 
   mountToolbarOnce();
-  renderChrome();
-
-  if (!boot.model_ready) {
-    openModal("setup");
-  } else if (
+  const autoOpenBookId =
+    boot.model_ready &&
     boot.settings.last_book_id &&
     boot.library.some((b) => b.id === boot.settings.last_book_id)
-  ) {
-    await openBookById(boot.settings.last_book_id);
+      ? boot.settings.last_book_id
+      : null;
+
+  if (!autoOpenBookId) {
+    setBusyLoading(null);
+    renderChrome();
+    if (!boot.model_ready) {
+      openModal("setup");
+    }
+  } else {
+    renderSidebar(sidebarEl, { onOpenModal: openModal });
+    syncToolbar();
+    renderCcBar(ccHostEl);
+    scrollCtrl.syncBackButton();
+    syncLoadingBanner();
+    await openBookById(autoOpenBookId);
   }
 }
 

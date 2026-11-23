@@ -105,14 +105,14 @@ export class ScrollController {
    * Scrolls the viewport so the active highlighted sentence stays near the top (~16% down)
    * when reading advances to a new row/sentence.
    */
-  public onActiveSentenceChanged(sentenceIdx: number, force = false): void {
+  public onActiveSentenceChanged(sentenceIdx: number, force = false, instant = false): void {
     this.syncBackButton();
     if (!state.autoScrollEnabled) return;
     if (!force && this.lastScrolledSid === sentenceIdx) return;
-    this.scrollToActiveElement(force);
+    this.scrollToActiveElement(force, instant);
   }
 
-  public scrollToActiveElement(force = false): void {
+  public scrollToActiveElement(force = false, instant = false): void {
     const target = this.viewport.querySelector<HTMLElement>(
       `[data-active-sid="true"]`,
     );
@@ -126,10 +126,10 @@ export class ScrollController {
     // Only scroll if moved down past the next row, offscreen above, or forced
     if (force || Math.abs(delta) > 22) {
       this.lastScrolledSid = state.tts.sentence_idx;
-      this.programmaticUntil = performance.now() + 750;
+      this.programmaticUntil = performance.now() + (instant ? 250 : 750);
       this.viewport.scrollTo({
         top: Math.max(0, this.viewport.scrollTop + delta),
-        behavior: "smooth",
+        behavior: instant ? "auto" : "smooth",
       });
     } else {
       this.lastScrolledSid = state.tts.sentence_idx;

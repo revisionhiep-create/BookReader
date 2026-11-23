@@ -42,7 +42,7 @@ export class PdfViewer {
     toc: TocEntry[],
     cursorIdx: number,
     preserving: boolean,
-  ) => void;
+  ) => void | Promise<void>;
 
   private pdfDoc: pdfjsLib.PDFDocumentProxy | null = null;
   private loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
@@ -70,7 +70,7 @@ export class PdfViewer {
       toc: TocEntry[],
       cursorIdx: number,
       preserving: boolean,
-    ) => void,
+    ) => void | Promise<void>,
   ) {
     this.container = container;
     this.viewport = viewport;
@@ -100,29 +100,70 @@ export class PdfViewer {
     this.container.innerHTML = "";
   }
 
-  public async mountPdf(book: BookMeta): Promise<void> {
+  public async mountPdf(
+    book: BookMeta,
+    onProgress?: (msg: string) => void,
+  ): Promise<void> {
     this.clear();
+    const mountGen = this.renderGeneration;
     this.currentBook = book;
 
-    this.container.innerHTML = `<div style="padding:48px;color:var(--text-secondary);">Loading PDF pages...</div>`;
+    this.container.innerHTML = `
+      <div class="pdf-loading-card">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <span id="pdf-loading-msg">Loading book &amp; restoring last reading position, please wait...</span>
+      </div>
+    `;
+    const loadingMsgEl = this.container.querySelector<HTMLElement>("#pdf-loading-msg");
+    const reportProgress = (msg: string) => {
+      if (mountGen !== this.renderGeneration) return;
+      if (loadingMsgEl) loadingMsgEl.textContent = msg;
+      onProgress?.(msg);
+    };
 
+    reportProgress("Opening PDF document, please wait...");
     const url = `http://bookmedia.localhost/book/${book.id}`;
     this.loadingTask = pdfjsLib.getDocument({ url });
-    this.pdfDoc = await this.loadingTask.promise;
+    const doc = await this.loadingTask.promise;
+    if (mountGen !== this.renderGeneration) {
+      void doc.cleanup();
+      return;
+    }
+    this.pdfDoc = doc;
 
-    const numPages = this.pdfDoc.numPages;
+    const numPages = doc.numPages;
     this.basePageDimensions = [];
 
     // Sample unscaled (1.0x) dimensions once so future zooms resize instantaneously
     for (let p = 1; p <= numPages; p++) {
-      const page = await this.pdfDoc.getPage(p);
+      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+      const page = await doc.getPage(p);
+      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
       const vp = page.getViewport({ scale: 1.0 });
       this.basePageDimensions.push({ width: vp.width, height: vp.height });
+      if (p === 1 || p % 25 === 0 || p === numPages) {
+        reportProgress(`Preparing pages (${p} / ${numPages}), please wait...`);
+      }
     }
 
+    const extracted = await this.extractSentencesData(false, mountGen, reportProgress);
+    if (!extracted || mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+
+    reportProgress("Jumping to your last reading position, please wait...");
+    this.sentenceRects = extracted.rects;
+    this.pageSentences = extracted.pageSentences;
     this.buildDomSkeleton();
-    await this.extractAllSentences(false);
-    this.syncHighlight(state.tts.sentence_idx);
+    this.activeSid = extracted.newCursor;
+    this.syncHighlight(extracted.newCursor);
+    await this.onSentencesExtracted(
+      extracted.sentences,
+      extracted.toc,
+      extracted.newCursor,
+      false,
+    );
+    if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+    this.syncHighlight(extracted.newCursor);
+    this.refreshVisibleHitLayers(extracted.newCursor);
   }
 
   public rebuildForZoom(): void {
@@ -500,21 +541,60 @@ export class PdfViewer {
     await work;
   }
 
-  private async extractAllSentences(preservingPos: boolean): Promise<void> {
-    if (!this.pdfDoc || !this.currentBook) return;
+  private async extractAllSentences(
+    preservingPos: boolean,
+    onProgress?: (msg: string) => void,
+  ): Promise<void> {
+    const mountGen = this.renderGeneration;
+    const doc = this.pdfDoc;
+    const extracted = await this.extractSentencesData(preservingPos, mountGen, onProgress);
+    if (!extracted || mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+
+    this.sentenceRects = extracted.rects;
+    this.pageSentences = extracted.pageSentences;
+    await this.onSentencesExtracted(
+      extracted.sentences,
+      extracted.toc,
+      extracted.newCursor,
+      preservingPos,
+    );
+    this.refreshVisibleHitLayers(extracted.newCursor);
+  }
+
+  private async extractSentencesData(
+    preservingPos: boolean,
+    mountGen: number,
+    onProgress?: (msg: string) => void,
+  ): Promise<{
+    sentences: SentenceItem[];
+    rects: RectNorm[][];
+    pageSentences: Map<number, number[]>;
+    toc: TocEntry[];
+    newCursor: number;
+  } | null> {
+    const doc = this.pdfDoc;
+    const book = this.currentBook;
+    if (!doc || !book) return null;
 
     const oldSid = state.tts.sentence_idx;
     const oldPage = state.sentences[oldSid]?.page ?? 1;
     const oldSnippet = state.sentences[oldSid]?.text.slice(0, 48) ?? "";
 
-    const hdrPct = this.currentBook.pdf_header_ignore_pct;
-    const ftrPct = this.currentBook.pdf_footer_ignore_pct;
+    const hdrPct = book.pdf_header_ignore_pct;
+    const ftrPct = book.pdf_footer_ignore_pct;
     const allLines: PdfLine[] = [];
+    const numPages = doc.numPages;
 
-    for (let p = 1; p <= this.pdfDoc.numPages; p++) {
-      const page = await this.pdfDoc.getPage(p);
+    for (let p = 1; p <= numPages; p++) {
+      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
+      if (p === 1 || p % 15 === 0 || p === numPages) {
+        onProgress?.(`Indexing page ${p} of ${numPages}, please wait...`);
+      }
+      const page = await doc.getPage(p);
+      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
       const vp = page.getViewport({ scale: 1.0 });
       const content = await page.getTextContent();
+      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
       const spans: PdfSpan[] = [];
 
       for (const rawItem of content.items) {
@@ -538,17 +618,16 @@ export class PdfViewer {
     }
 
     const { sentences, rects } = buildStitchedPdfSentences(allLines);
-    this.sentenceRects = rects;
-    this.pageSentences.clear();
+    const pageSentences = new Map<number, number[]>();
     for (let sid = 0; sid < rects.length; sid++) {
       const seen = new Set<number>();
       for (const r of rects[sid]) {
         if (!seen.has(r.page)) {
           seen.add(r.page);
-          let arr = this.pageSentences.get(r.page);
+          let arr = pageSentences.get(r.page);
           if (!arr) {
             arr = [];
-            this.pageSentences.set(r.page, arr);
+            pageSentences.set(r.page, arr);
           }
           arr.push(sid);
         }
@@ -557,16 +636,16 @@ export class PdfViewer {
 
     // Extract PDF outline / TOC if present
     const toc = await this.extractOutlineToc(sentences);
+    if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
 
-    let newCursor = this.currentBook.current_sentence_idx;
+    let newCursor = book.current_sentence_idx;
     if (preservingPos) {
       newCursor = findPreservedPdfCursor(sentences, oldPage, oldSnippet, oldSid);
     } else {
       newCursor = Math.min(newCursor, Math.max(0, sentences.length - 1));
     }
 
-    this.onSentencesExtracted(sentences, toc, newCursor, preservingPos);
-    this.refreshVisibleHitLayers(newCursor);
+    return { sentences, rects, pageSentences, toc, newCursor };
   }
 
   private async extractOutlineToc(sentences: SentenceItem[]): Promise<TocEntry[]> {
@@ -799,10 +878,16 @@ function buildStitchedPdfSentences(lines: PdfLine[]): {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.paraBreakBefore && curPara.length > 0) {
-      curPara[curPara.length - 1].paraEnd = true;
-      paragraphs.push(curPara);
-      curPara = [];
+    if (curPara.length > 0) {
+      const prev = curPara[curPara.length - 1];
+      const crossedPageAfterSentence =
+        line.page !== prev.rect.page &&
+        /[.!?]["'”’)\]]*$/.test(prev.text.trim());
+      if (line.paraBreakBefore || crossedPageAfterSentence) {
+        prev.paraEnd = true;
+        paragraphs.push(curPara);
+        curPara = [];
+      }
     }
 
     let lineText = line.text;
@@ -889,6 +974,16 @@ function splitParagraphKeepOffsets(
   let bufferStart = -1;
   let bufferText = "";
 
+  const pushTrimmed = (rawStart: number, rawEnd: number, rawText: string) => {
+    const trimmed = rawText.trim();
+    if (!trimmed) return;
+    const leadWs = rawText.length - rawText.trimStart().length;
+    const trailWs = rawText.length - rawText.trimEnd().length;
+    const trimmedStart = rawStart + leadWs;
+    const trimmedEnd = Math.max(trimmedStart, rawEnd - trailWs);
+    out.push({ text: trimmed, start: trimmedStart, end: trimmedEnd });
+  };
+
   while ((match = regex.exec(paragraph)) !== null) {
     const raw = match[0];
     if (!raw.trim()) continue;
@@ -903,17 +998,13 @@ function splitParagraphKeepOffsets(
     if (/(?:\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e)|\d)\.$/.test(trimmed)) {
       continue;
     }
-    out.push({ text: trimmed, start: bufferStart, end: mEnd });
+    pushTrimmed(bufferStart, mEnd, bufferText);
     bufferStart = -1;
     bufferText = "";
   }
 
   if (bufferText.trim()) {
-    out.push({
-      text: bufferText.trim(),
-      start: Math.max(0, bufferStart),
-      end: paragraph.length,
-    });
+    pushTrimmed(Math.max(0, bufferStart), paragraph.length, bufferText);
   }
   return out;
 }

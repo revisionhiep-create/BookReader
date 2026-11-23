@@ -1280,3 +1280,53 @@ html[data-theme="dark"] .pdf-page-card.dark-invert canvas {
   opacity: 0.6;
   cursor: default;
 }
+
+.loading-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 8px 16px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.loading-banner.hidden {
+  display: none;
+}
+
+.pdf-loading-card {
+  margin: 14vh auto 0;
+  padding: 20px 24px;
+  max-width: 440px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  box-shadow: var(--shadow-card);
+}
+
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: br-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes br-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
