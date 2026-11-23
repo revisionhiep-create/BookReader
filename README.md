@@ -4,6 +4,8 @@ A self-contained Windows desktop text-to-speech reader built with **Rust** and *
 
 No Python runtime, account, or cloud TTS API is required — models and voices download locally into a portable `BookReader_Data/` folder next to `BookReader.exe`.
 
+**[Download BookReader.exe (Windows x64 — Latest Release)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · [View Release (`v1.0.0`)](https://github.com/revisionhiep-create/BookReader/releases/latest)
+
 ---
 
 ## Quick Start for Windows Users (BookReader.exe)
@@ -11,7 +13,7 @@ No Python runtime, account, or cloud TTS API is required — models and voices d
 - **Requirements**: Windows 10 or Windows 11 (64-bit). Microsoft Edge WebView2 is preinstalled on Windows 10/11 (if missing on an older Windows 10 install, get the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)). No NVIDIA GPU or CUDA installation is required to launch or read — built-in voices run smoothly on CPU, and optional Qwen3-TTS voice cloning automatically uses NVIDIA CUDA if installed and falls back to CPU otherwise.
 
 1. **Download & Place in Its Own Folder**
-   - Download `BookReader.exe` from the [GitHub Releases page](https://github.com/revisionhiep-create/BookReader/releases/latest) (or directly from the repository root).
+   - Download **[BookReader.exe (direct download)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** from the [GitHub Releases page](https://github.com/revisionhiep-create/BookReader/releases/latest) (also available in [v1.0.0](https://github.com/revisionhiep-create/BookReader/releases/tag/v1.0.0)).
    - Put `BookReader.exe` inside its own dedicated folder (for example, `C:\BookReader\BookReader.exe`) rather than loosely on your Desktop or in `Downloads`, because BookReader creates a portable `BookReader_Data\` folder right beside the `.exe` for models, voices, and imported books.
 
 2. **First Launch (Windows SmartScreen)**
