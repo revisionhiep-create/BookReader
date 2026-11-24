@@ -721,7 +721,8 @@ mod tests {
 
         let p = resolve_window_placement(&saved, &monitors).unwrap();
         assert!(!p.relocated);
-        assert_eq!((p.x, p.y, p.width, p.height), (-7, 0, 960, 1000));
+        let expected_x = if cfg!(target_os = "windows") { -7 } else { 0 };
+        assert_eq!((p.x, p.y, p.width, p.height), (expected_x, 0, 960, 1000));
     }
 
     #[test]

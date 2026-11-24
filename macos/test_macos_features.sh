@@ -20,7 +20,7 @@ echo "==> 1. Verifying frontend TypeScript & Vite build"
 npm run build
 
 echo "==> 2. Running full Rust unit test suite for $TARGET ($FEATURES)"
-cargo test --manifest-path src-tauri/Cargo.toml --target "$TARGET" --features "$FEATURES"
+cargo test --release --manifest-path src-tauri/Cargo.toml --target "$TARGET" --features "$FEATURES"
 
 APP_BUNDLE="$REPO_ROOT/src-tauri/target/$TARGET/release/bundle/macos/BookReader.app"
 DMG_PATH="$SCRIPT_DIR/dist/$DMG_NAME"
