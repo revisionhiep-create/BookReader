@@ -13,3 +13,4 @@ macos/staging/
 *.pdb
 .DS_Store
 Thumbs.db
+AGENT_NOTES.md
