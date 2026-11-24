@@ -40,8 +40,7 @@ else
 fi
 
 echo "==> 4. Testing portable folder mode + full feature self-test + live Phonon TTS synthesis"
-PORTABLE_TEST_DIR="$(mktemp -d /tmp/bookreader_portable_test.XXXXXX)"
-REAL_PORTABLE_TEST_DIR="$(cd "$PORTABLE_TEST_DIR" && pwd -P)"
+PORTABLE_TEST_DIR="$(mktemp -d /private/tmp/bookreader_portable_test.XXXXXX)"
 cleanup() {
   if [[ -n "${MOUNT_POINT:-}" ]] && mount | grep -q "$MOUNT_POINT"; then
     hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
@@ -51,11 +50,11 @@ cleanup() {
 trap cleanup EXIT
 
 ditto "$APP_BUNDLE" "$PORTABLE_TEST_DIR/BookReader.app"
-TEST_CONFIG_DIR="$REAL_PORTABLE_TEST_DIR/TestConfig/Bookreader"
+TEST_CONFIG_DIR="$PORTABLE_TEST_DIR/TestConfig/Bookreader"
 
 INIT_OUT="$(BOOKREADER_CONFIG_DIR="$TEST_CONFIG_DIR" "$PORTABLE_TEST_DIR/BookReader.app/$BIN_REL" --check-portable-init)"
 echo "$INIT_OUT"
-echo "$INIT_OUT" | grep -q "DATA_DIR=$REAL_PORTABLE_TEST_DIR/BookReader_Data"
+echo "$INIT_OUT" | grep -q "DATA_DIR=$PORTABLE_TEST_DIR/BookReader_Data"
 test -d "$PORTABLE_TEST_DIR/BookReader_Data/models"
 test -d "$PORTABLE_TEST_DIR/BookReader_Data/voices"
 test -d "$PORTABLE_TEST_DIR/BookReader_Data/books"
@@ -64,7 +63,7 @@ test -d "$PORTABLE_TEST_DIR/BookReader_Data/books"
 
 echo "==> 5. Mounting $DMG_PATH and testing read-only DMG fallback behavior"
 test -f "$DMG_PATH"
-MOUNT_POINT="$(mktemp -d /tmp/bookreader_dmg_mount.XXXXXX)"
+MOUNT_POINT="$(mktemp -d /private/tmp/bookreader_dmg_mount.XXXXXX)"
 hdiutil attach "$DMG_PATH" -mountpoint "$MOUNT_POINT" -nobrowse -readonly
 
 test -d "$MOUNT_POINT/BookReader.app"
