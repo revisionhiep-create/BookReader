@@ -20,7 +20,7 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             dmg: BookReader-1.1.0-macos-arm64-portable.dmg
           - arch: x64
