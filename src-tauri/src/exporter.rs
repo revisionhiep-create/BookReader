@@ -354,7 +354,7 @@ fn run_export_worker(
     );
 }
 
-enum AudioExportSink {
+pub enum AudioExportSink {
     Wav(hound::WavWriter<BufWriter<File>>),
     Mp3 {
         encoder: mp3lame_encoder::Encoder,
@@ -364,7 +364,7 @@ enum AudioExportSink {
 }
 
 impl AudioExportSink {
-    fn create(format: ExportFormat, path: &Path, title: &str) -> Result<Self, String> {
+    pub fn create(format: ExportFormat, path: &Path, title: &str) -> Result<Self, String> {
         match format {
             ExportFormat::Wav => {
                 let spec = hound::WavSpec {
@@ -414,7 +414,7 @@ impl AudioExportSink {
         }
     }
 
-    fn write_f32_chunk(&mut self, samples: &[f32]) -> Result<(), String> {
+    pub fn write_f32_chunk(&mut self, samples: &[f32]) -> Result<(), String> {
         if samples.is_empty() {
             return Ok(());
         }
@@ -449,7 +449,7 @@ impl AudioExportSink {
         }
     }
 
-    fn write_silence(&mut self, sample_count: usize) -> Result<(), String> {
+    pub fn write_silence(&mut self, sample_count: usize) -> Result<(), String> {
         const CHUNK: usize = 4096;
         let zeros = vec![0.0_f32; CHUNK];
         let mut remaining = sample_count;
@@ -461,7 +461,7 @@ impl AudioExportSink {
         Ok(())
     }
 
-    fn finish(self) -> Result<(), String> {
+    pub fn finish(self) -> Result<(), String> {
         match self {
             Self::Wav(w) => w.finalize().map_err(|e| format!("WAV finalize error: {e}")),
             Self::Mp3 {
@@ -485,11 +485,14 @@ impl AudioExportSink {
     }
 }
 
-/// Keeps Windows awake while a multi-minute export runs, restoring normal sleep policy on Drop.
-struct SleepInhibitor;
+/// Keeps the OS awake while a multi-minute export runs, restoring normal sleep policy on Drop.
+pub struct SleepInhibitor {
+    #[cfg(target_os = "macos")]
+    child: Option<std::process::Child>,
+}
 
 impl SleepInhibitor {
-    fn acquire() -> Self {
+    pub fn acquire() -> Self {
         #[cfg(target_os = "windows")]
         unsafe {
             use windows_sys::Win32::System::Power::{
@@ -497,7 +500,19 @@ impl SleepInhibitor {
             };
             SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
         }
-        Self
+        #[cfg(target_os = "macos")]
+        let child = std::process::Command::new("caffeinate")
+            .args(["-i", "-w", &std::process::id().to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok();
+
+        Self {
+            #[cfg(target_os = "macos")]
+            child,
+        }
     }
 }
 
@@ -508,5 +523,46 @@ impl Drop for SleepInhibitor {
             use windows_sys::Win32::System::Power::{ES_CONTINUOUS, SetThreadExecutionState};
             SetThreadExecutionState(ES_CONTINUOUS);
         }
+        #[cfg(target_os = "macos")]
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exports_valid_wav_and_mp3_and_exercises_sleep_inhibitor() {
+        let root = std::env::temp_dir().join(format!("bookreader_exp_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let _sleep = SleepInhibitor::acquire();
+        let tone: Vec<f32> = (0..12_000)
+            .map(|i| 0.25 * (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 24_000.0).sin())
+            .collect();
+
+        let wav_path = root.join("test.wav");
+        let mut wav_sink = AudioExportSink::create(ExportFormat::Wav, &wav_path, "Test Book").unwrap();
+        wav_sink.write_f32_chunk(&tone).unwrap();
+        wav_sink.write_silence(2400).unwrap();
+        wav_sink.finish().unwrap();
+        let wav_bytes = std::fs::read(&wav_path).unwrap();
+        assert!(wav_bytes.len() > 44);
+        assert_eq!(&wav_bytes[0..4], b"RIFF");
+        assert_eq!(&wav_bytes[8..12], b"WAVE");
+
+        let mp3_path = root.join("test.mp3");
+        let mut mp3_sink = AudioExportSink::create(ExportFormat::Mp3, &mp3_path, "Test Book").unwrap();
+        mp3_sink.write_f32_chunk(&tone).unwrap();
+        mp3_sink.write_silence(2400).unwrap();
+        mp3_sink.finish().unwrap();
+        let mp3_bytes = std::fs::read(&mp3_path).unwrap();
+        assert!(mp3_bytes.len() > 256);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

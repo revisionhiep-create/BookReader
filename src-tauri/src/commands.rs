@@ -1,6 +1,6 @@
 //! Tauri IPC commands bridging frontend UI actions and Rust backend engines.
 
-use crate::documents::{import_book, load_non_pdf_document};
+use crate::documents::{import_book, load_non_pdf_document, media_base_url};
 use crate::downloader::DownloadManager;
 use crate::exporter::ExportManager;
 use crate::media_keys::MediaKeysBridge;
@@ -37,6 +37,13 @@ pub fn get_bootstrap(state: State<'_, AppState>) -> AppBootstrap {
     let cloned = state.storage.cloned_voices();
     let settings = state.storage.settings();
     let variant = settings.qwen_model_variant;
+    let platform = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "linux"
+    };
     AppBootstrap {
         model_ready: paths.model_ready(),
         engine_loaded: state.tts.is_model_loaded(),
@@ -45,6 +52,8 @@ pub fn get_bootstrap(state: State<'_, AppState>) -> AppBootstrap {
         qwen_device_label: state.tts.engine().qwen().device_label(),
         appdata_dir: paths.appdata_dir.to_string_lossy().into_owned(),
         data_dir: paths.data_dir.to_string_lossy().into_owned(),
+        media_base_url: media_base_url().to_string(),
+        platform: platform.to_string(),
         settings,
         library: state.storage.library(),
         pronunciations: state.storage.pronunciations(),
@@ -745,17 +754,40 @@ pub fn set_sleep_timer(
 #[tauri::command]
 pub fn open_folder_in_explorer(path: String) -> Result<(), String> {
     let p = PathBuf::from(&path);
-    let dir = if p.is_file() {
-        p.parent().unwrap_or(&p).to_path_buf()
-    } else {
-        p
-    };
     #[cfg(target_os = "windows")]
     {
+        let dir = if p.is_file() {
+            p.parent().unwrap_or(&p).to_path_buf()
+        } else {
+            p
+        };
         std::process::Command::new("explorer")
             .arg(dir)
             .spawn()
             .map_err(|e| format!("Failed opening Explorer: {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        if p.is_file() {
+            cmd.arg("-R").arg(&p);
+        } else {
+            cmd.arg(&p);
+        }
+        cmd.spawn()
+            .map_err(|e| format!("Failed opening Finder: {e}"))?;
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let dir = if p.is_file() {
+            p.parent().unwrap_or(&p).to_path_buf()
+        } else {
+            p
+        };
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("Failed opening file manager: {e}"))?;
     }
     Ok(())
 }

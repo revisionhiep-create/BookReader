@@ -24,6 +24,7 @@ const REF_TRAILING_SILENCE_MS: usize = 120;
 const REF_EDGE_FADE_MS: usize = 10;
 
 static CUDA_AVAILABLE: OnceLock<bool> = OnceLock::new();
+static METAL_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 #[cfg(all(target_os = "windows", feature = "qwen-cuda"))]
 fn cuda_dlls_present() -> bool {
@@ -69,6 +70,27 @@ fn cuda_available() -> bool {
             false
         }
     })
+}
+
+fn metal_available() -> bool {
+    *METAL_AVAILABLE.get_or_init(|| {
+        #[cfg(feature = "qwen-metal")]
+        {
+            Device::new_metal(0).is_ok()
+        }
+        #[cfg(not(feature = "qwen-metal"))]
+        {
+            false
+        }
+    })
+}
+
+fn cpu_device_label() -> &'static str {
+    if cfg!(feature = "qwen-accelerate") {
+        "CPU + Apple Accelerate (F32)"
+    } else {
+        "CPU Fallback (F32)"
+    }
 }
 
 struct LoadedQwen {
@@ -118,8 +140,10 @@ impl QwenCloneEngine {
     pub fn detect_device_label() -> String {
         if cuda_available() {
             "CUDA GPU (BF16)".to_string()
+        } else if metal_available() {
+            "Apple Metal GPU (F32)".to_string()
         } else {
-            "CPU Fallback (F32)".to_string()
+            cpu_device_label().to_string()
         }
     }
 
@@ -141,11 +165,20 @@ impl QwenCloneEngine {
             match Device::new_cuda(0) {
                 Ok(dev) => return (dev, DType::BF16, "CUDA GPU (BF16)".to_string()),
                 Err(err) => {
-                    tracing::warn!(error = %err, "CUDA unavailable for Qwen3-TTS; falling back to CPU F32");
+                    tracing::warn!(error = %err, "CUDA unavailable for Qwen3-TTS; falling back");
                 }
             }
         }
-        (Device::Cpu, DType::F32, "CPU Fallback (F32)".to_string())
+        #[cfg(feature = "qwen-metal")]
+        if metal_available() {
+            match Device::new_metal(0) {
+                Ok(dev) => return (dev, DType::F32, "Apple Metal GPU (F32)".to_string()),
+                Err(err) => {
+                    tracing::warn!(error = %err, "Apple Metal unavailable for Qwen3-TTS; falling back to CPU F32");
+                }
+            }
+        }
+        (Device::Cpu, DType::F32, cpu_device_label().to_string())
     }
 
     fn mark_loaded(&self, variant: QwenModelVariant, label: &str) {
@@ -200,9 +233,35 @@ impl QwenCloneEngine {
             load_generate_config: true,
             use_flash_attn: false,
         };
-        let model = loader
-            .load_tts_model(&device, &cfg)
-            .map_err(|e| format!("Failed loading {} model: {e}", variant.display_name()))?;
+        let (model, device, dtype, device_label) = match loader.load_tts_model(&device, &cfg) {
+            Ok(m) => (m, device, dtype, device_label),
+            Err(gpu_err) if !matches!(device, Device::Cpu) => {
+                tracing::warn!(
+                    error = %gpu_err,
+                    device = %device_label,
+                    "Failed loading Qwen3-TTS on GPU; retrying on CPU F32"
+                );
+                let cpu_cfg = LoaderConfig {
+                    dtype: DType::F32,
+                    ..cfg
+                };
+                let cpu_model = loader.load_tts_model(&Device::Cpu, &cpu_cfg).map_err(|e| {
+                    format!("Failed loading {} model: {e}", variant.display_name())
+                })?;
+                (
+                    cpu_model,
+                    Device::Cpu,
+                    DType::F32,
+                    cpu_device_label().to_string(),
+                )
+            }
+            Err(err) => {
+                return Err(format!(
+                    "Failed loading {} model: {err}",
+                    variant.display_name()
+                ));
+            }
+        };
 
         Ok(LoadedQwen {
             variant,

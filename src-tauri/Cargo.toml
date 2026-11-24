@@ -1,6 +1,6 @@
 [package]
 name = "bookreader"
-version = "1.0.0"
+version = "1.1.0"
 description = "Self-contained TTS reader powered by Gradium Phonon 31M"
 authors = ["BookReader"]
 edition = "2024"
@@ -17,8 +17,11 @@ path = "src/main.rs"
 tauri-build = { version = "2.7", features = [] }
 
 [features]
-default = ["qwen-cuda"]
+default = []
 qwen-cuda = ["qwen_tts/cuda", "candle-core/cuda"]
+qwen-metal = ["qwen_tts/metal", "candle-core/metal"]
+qwen-accelerate = ["qwen_tts/accelerate", "candle-core/accelerate"]
+ptts-accelerate = ["ptts/accelerate"]
 
 [dependencies]
 tauri = { version = "2.12", features = [] }

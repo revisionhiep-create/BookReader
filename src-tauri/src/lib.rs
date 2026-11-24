@@ -7,6 +7,7 @@ mod exporter;
 mod media_keys;
 mod models;
 mod paths;
+pub mod self_test;
 mod sleep_timer;
 mod storage;
 mod text_pipeline;

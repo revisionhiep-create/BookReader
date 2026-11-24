@@ -1,8 +1,13 @@
 //! Filesystem path resolution for BookReader.
 //!
 //! - Portable data (`BookReader_Data/{models,voices,books}`) sits next to the
-//!   executable in release builds (or at the workspace root during `cargo test`/`dev`).
-//! - User settings and rule databases live in `%APPDATA%\Bookreader\`.
+//!   executable (Windows) or next to `BookReader.app` (macOS) in release builds,
+//!   or at the workspace root during `cargo test`/`dev`.
+//! - If the macOS `.app` sits in a read-only location (e.g., mounted `.dmg`,
+//!   `/Applications`, or App Translocation), portable data falls back cleanly to
+//!   `<system config dir>/Bookreader/BookReader_Data/`.
+//! - User settings and rule databases live in `%APPDATA%\Bookreader\` (Windows)
+//!   or `~/Library/Application Support/Bookreader/` (macOS).
 
 use crate::models::QwenModelVariant;
 use std::fs;
@@ -24,24 +29,29 @@ pub struct AppPaths {
 impl AppPaths {
     /// Initializes all required directories on disk and returns the resolved paths.
     pub fn init() -> Result<Self, String> {
-        let appdata_base = dirs::config_dir()
-            .ok_or_else(|| "Could not determine Windows AppData folder".to_string())?;
-        let appdata_dir = appdata_base.join("Bookreader");
+        let appdata_dir = match std::env::var_os("BOOKREADER_CONFIG_DIR").filter(|v| !v.is_empty()) {
+            Some(override_dir) => PathBuf::from(override_dir),
+            None => dirs::config_dir()
+                .ok_or_else(|| "Could not determine system config directory".to_string())?
+                .join("Bookreader"),
+        };
 
-        let base_dir = if cfg!(debug_assertions) {
+        let data_dir = if let Some(override_data) =
+            std::env::var_os("BOOKREADER_DATA_DIR").filter(|v| !v.is_empty())
+        {
+            PathBuf::from(override_data)
+        } else if cfg!(debug_assertions) {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."))
+                .join("BookReader_Data")
         } else {
-            std::env::current_exe()
-                .map_err(|e| format!("Failed to determine executable path: {e}"))?
-                .parent()
-                .map(Path::to_path_buf)
-                .ok_or_else(|| "Executable has no parent directory".to_string())?
+            let exe_path = std::env::current_exe()
+                .map_err(|e| format!("Failed to determine executable path: {e}"))?;
+            resolve_release_data_dir(&exe_path, &appdata_dir, cfg!(target_os = "macos"))
         };
 
-        let data_dir = base_dir.join("BookReader_Data");
         Self::from_roots(appdata_dir, data_dir)
     }
 
@@ -229,6 +239,82 @@ pub fn validate_single_segment(segment: &str) -> Result<(), String> {
     }
 }
 
+/// Resolves the containing folder for a macOS `.app` bundle (`<parent>/BookReader.app/Contents/MacOS/BookReader` -> `<parent>`),
+/// falling back to the executable's immediate parent when not running inside an `.app` bundle.
+pub fn bundle_container_dir(exe_path: &Path) -> PathBuf {
+    let Some(macos_dir) = exe_path.parent() else {
+        return PathBuf::from(".");
+    };
+    if macos_dir.file_name().and_then(|n| n.to_str()) == Some("MacOS")
+        && let Some(contents_dir) = macos_dir.parent()
+        && contents_dir.file_name().and_then(|n| n.to_str()) == Some("Contents")
+        && let Some(app_bundle) = contents_dir.parent()
+        && app_bundle
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("app"))
+        && let Some(container) = app_bundle.parent()
+    {
+        return container.to_path_buf();
+    }
+    macos_dir.to_path_buf()
+}
+
+fn is_macos_non_portable_container(container: &Path) -> bool {
+    let normalized = container.to_string_lossy().replace('\\', "/");
+    if normalized.contains("/AppTranslocation/") {
+        return true;
+    }
+    if normalized == "/Applications" || normalized.starts_with("/Applications/") {
+        return true;
+    }
+    if let Some(home) = dirs::home_dir() {
+        let user_apps = home.join("Applications");
+        if container == user_apps || container.starts_with(&user_apps) {
+            return true;
+        }
+    }
+    false
+}
+
+fn dir_is_writable_for_data(candidate: &Path) -> bool {
+    if fs::create_dir_all(candidate).is_err() {
+        return false;
+    }
+    let probe = candidate.join(format!(".bookreader_write_probe_{}", uuid::Uuid::new_v4()));
+    match fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Resolves the release `BookReader_Data` folder for the given executable and config directory.
+/// On macOS, uses `<container>/BookReader_Data` when portable & writable, and otherwise falls back
+/// cleanly to `<appdata_dir>/BookReader_Data` (for mounted `.dmg`, `/Applications`, or App Translocation).
+pub fn resolve_release_data_dir(exe_path: &Path, appdata_dir: &Path, is_macos: bool) -> PathBuf {
+    if !is_macos {
+        let base = exe_path.parent().unwrap_or_else(|| Path::new("."));
+        return base.join("BookReader_Data");
+    }
+
+    let container = bundle_container_dir(exe_path);
+    let portable_candidate = container.join("BookReader_Data");
+    let non_portable = is_macos_non_portable_container(&container);
+
+    if (!non_portable || portable_candidate.is_dir()) && dir_is_writable_for_data(&portable_candidate)
+    {
+        return portable_candidate;
+    }
+    appdata_dir.join("BookReader_Data")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +341,44 @@ mod tests {
         fs::write(paths.cloned_voice_ref_wav_path(vid).unwrap(), b"RIFF").unwrap();
         assert!(paths.is_cloned_voice_available(vid, QwenModelVariant::Fast0_6B));
         assert!(paths.is_cloned_voice_available(vid, QwenModelVariant::Quality1_7B));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolves_macos_bundle_container_and_fallbacks() {
+        let root = std::env::temp_dir().join(format!("bookreader_mac_paths_{}", uuid::Uuid::new_v4()));
+        let portable_dir = root.join("PortableFolder");
+        fs::create_dir_all(portable_dir.join("BookReader.app/Contents/MacOS")).unwrap();
+        let exe = portable_dir.join("BookReader.app/Contents/MacOS/BookReader");
+        let appdata = root.join("AppSupport/Bookreader");
+
+        assert_eq!(bundle_container_dir(&exe), portable_dir);
+        let resolved_portable = resolve_release_data_dir(&exe, &appdata, true);
+        assert_eq!(resolved_portable, portable_dir.join("BookReader_Data"));
+
+        // AppTranslocation must fall back to appdata/BookReader_Data
+        let translocated = PathBuf::from(
+            "/private/var/folders/xx/T/AppTranslocation/ABC-123/d/BookReader.app/Contents/MacOS/BookReader",
+        );
+        assert_eq!(
+            resolve_release_data_dir(&translocated, &appdata, true),
+            appdata.join("BookReader_Data")
+        );
+
+        // /Applications without pre-existing BookReader_Data falls back to appdata/BookReader_Data
+        let applications_exe = PathBuf::from("/Applications/BookReader.app/Contents/MacOS/BookReader");
+        assert_eq!(
+            resolve_release_data_dir(&applications_exe, &appdata, true),
+            appdata.join("BookReader_Data")
+        );
+
+        // Windows always resolves next to exe
+        let win_exe = portable_dir.join("BookReader.exe");
+        assert_eq!(
+            resolve_release_data_dir(&win_exe, &appdata, false),
+            portable_dir.join("BookReader_Data")
+        );
 
         let _ = fs::remove_dir_all(root);
     }

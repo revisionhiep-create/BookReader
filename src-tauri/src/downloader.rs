@@ -160,6 +160,26 @@ impl DownloadManager {
         paths: &AppPaths,
         default_voice_id: Option<&str>,
     ) -> Result<(), String> {
+        self.download_phonon_model_inner(Some(app), paths, default_voice_id)
+            .await
+    }
+
+    /// Headless variant used by `--self-test-live-tts` when no Tauri window/AppHandle exists.
+    pub async fn download_phonon_model_headless(
+        &self,
+        paths: &AppPaths,
+        default_voice_id: Option<&str>,
+    ) -> Result<(), String> {
+        self.download_phonon_model_inner(None, paths, default_voice_id)
+            .await
+    }
+
+    async fn download_phonon_model_inner(
+        &self,
+        app: Option<&AppHandle>,
+        paths: &AppPaths,
+        default_voice_id: Option<&str>,
+    ) -> Result<(), String> {
         let _guard = self.acquire_slot("__model__")?;
         let total_files = MODEL_FILES.len();
 
@@ -191,20 +211,22 @@ impl DownloadManager {
             let _ = self.download_single_voice_inner(app, paths, vid, 0, 1).await;
         }
 
-        let _ = app.emit(
-            "download:progress",
-            DownloadProgressEvent {
-                kind: "model".to_string(),
-                item_id: "phonon-31m-en".to_string(),
-                current_file: "Complete".to_string(),
-                bytes_done: 1,
-                bytes_total: Some(1),
-                files_done: total_files,
-                files_total: total_files,
-                done: true,
-                error: None,
-            },
-        );
+        if let Some(app_handle) = app {
+            let _ = app_handle.emit(
+                "download:progress",
+                DownloadProgressEvent {
+                    kind: "model".to_string(),
+                    item_id: "phonon-31m-en".to_string(),
+                    current_file: "Complete".to_string(),
+                    bytes_done: 1,
+                    bytes_total: Some(1),
+                    files_done: total_files,
+                    files_total: total_files,
+                    done: true,
+                    error: None,
+                },
+            );
+        }
         Ok(())
     }
 
@@ -272,7 +294,7 @@ impl DownloadManager {
                 continue;
             }
             self.download_file_inner(
-                app,
+                Some(app),
                 "qwen_model",
                 item_id,
                 rel_path,
@@ -320,7 +342,7 @@ impl DownloadManager {
         if paths.is_voice_downloaded(voice_id) {
             return Ok(());
         }
-        self.download_single_voice_inner(app, paths, voice_id, 0, 1)
+        self.download_single_voice_inner(Some(app), paths, voice_id, 0, 1)
             .await?;
         let _ = app.emit(
             "download:progress",
@@ -353,7 +375,7 @@ impl DownloadManager {
             if paths.is_voice_downloaded(voice.voice_id) {
                 continue;
             }
-            self.download_single_voice_inner(app, paths, voice.voice_id, idx, total)
+            self.download_single_voice_inner(Some(app), paths, voice.voice_id, idx, total)
                 .await?;
         }
 
@@ -387,7 +409,7 @@ impl DownloadManager {
 
     async fn download_single_voice_inner(
         &self,
-        app: &AppHandle,
+        app: Option<&AppHandle>,
         paths: &AppPaths,
         voice_id: &str,
         file_idx: usize,
@@ -417,7 +439,7 @@ impl DownloadManager {
     #[allow(clippy::too_many_arguments)]
     async fn download_file(
         &self,
-        app: &AppHandle,
+        app: Option<&AppHandle>,
         kind: &str,
         item_id: &str,
         label: &str,
@@ -443,7 +465,7 @@ impl DownloadManager {
     #[allow(clippy::too_many_arguments)]
     async fn download_file_inner(
         &self,
-        app: &AppHandle,
+        app: Option<&AppHandle>,
         kind: &str,
         item_id: &str,
         label: &str,
@@ -501,20 +523,22 @@ impl DownloadManager {
                 } else {
                     (bytes_done, total_bytes)
                 };
-                let _ = app.emit(
-                    "download:progress",
-                    DownloadProgressEvent {
-                        kind: kind.to_string(),
-                        item_id: item_id.to_string(),
-                        current_file: label.to_string(),
-                        bytes_done: emit_done,
-                        bytes_total: emit_total,
-                        files_done: file_idx,
-                        files_total: total_files,
-                        done: false,
-                        error: None,
-                    },
-                );
+                if let Some(app_handle) = app {
+                    let _ = app_handle.emit(
+                        "download:progress",
+                        DownloadProgressEvent {
+                            kind: kind.to_string(),
+                            item_id: item_id.to_string(),
+                            current_file: label.to_string(),
+                            bytes_done: emit_done,
+                            bytes_total: emit_total,
+                            files_done: file_idx,
+                            files_total: total_files,
+                            done: false,
+                            error: None,
+                        },
+                    );
+                }
                 last_emit = std::time::Instant::now();
             }
         }
@@ -537,20 +561,22 @@ impl DownloadManager {
             (bytes_done, total_bytes.or(Some(bytes_done)), file_idx + 1)
         };
 
-        let _ = app.emit(
-            "download:progress",
-            DownloadProgressEvent {
-                kind: kind.to_string(),
-                item_id: item_id.to_string(),
-                current_file: label.to_string(),
-                bytes_done: emit_done,
-                bytes_total: emit_total,
-                files_done: emit_files_done,
-                files_total: total_files,
-                done: false,
-                error: None,
-            },
-        );
+        if let Some(app_handle) = app {
+            let _ = app_handle.emit(
+                "download:progress",
+                DownloadProgressEvent {
+                    kind: kind.to_string(),
+                    item_id: item_id.to_string(),
+                    current_file: label.to_string(),
+                    bytes_done: emit_done,
+                    bytes_total: emit_total,
+                    files_done: emit_files_done,
+                    files_total: total_files,
+                    done: false,
+                    error: None,
+                },
+            );
+        }
         Ok(())
     }
 }

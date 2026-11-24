@@ -79,7 +79,7 @@ function syncLoadingBanner(): void {
   if (busyLoadingMessage !== null) {
     msg = busyLoadingMessage;
   } else if (state.tts.status === "loading") {
-    msg = state.settings.voice_id.startsWith("cloned:")
+    msg = state.settings.voice_id.startsWith("clone_")
       ? "Warming up Qwen3-TTS voice model, please wait..."
       : "Warming up voice model and preparing audio, please wait...";
   }

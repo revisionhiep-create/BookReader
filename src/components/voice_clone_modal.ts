@@ -199,7 +199,7 @@ export function renderVoiceCloneModal(
     qwenStatus?.model_ready ??
     (state.bootstrap?.qwen_model_variant === activeVariant ? state.bootstrap.qwen_model_ready : false);
   const deviceLabel =
-    qwenStatus?.device_label ?? state.bootstrap?.qwen_device_label ?? "CUDA GPU (BF16)";
+    qwenStatus?.device_label ?? state.bootstrap?.qwen_device_label ?? "Auto (GPU / CPU)";
   const sizeGb = (
     (activeInfo?.estimated_size_mb ??
       qwenStatus?.estimated_size_mb ??

@@ -122,7 +122,8 @@ export class PdfViewer {
     };
 
     reportProgress("Opening PDF document, please wait...");
-    const url = `http://bookmedia.localhost/book/${book.id}`;
+    const mediaBase = state.bootstrap?.media_base_url ?? "http://bookmedia.localhost";
+    const url = `${mediaBase}/book/${book.id}`;
     this.loadingTask = pdfjsLib.getDocument({ url });
     const doc = await this.loadingTask.promise;
     if (mountGen !== this.renderGeneration) {

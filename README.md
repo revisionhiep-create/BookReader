@@ -1,43 +1,40 @@
 # BookReader
 
-A self-contained Windows desktop text-to-speech reader built with **Rust** and **Tauri v2** (Edge WebView2), powered locally by **Gradium Phonon 31M** (`gradium/phonon-31m-en` via `ptts`) across 37 English voices, with optional local **Qwen3-TTS** voice cloning.
+A self-contained cross-platform (**Windows** & **macOS**) desktop text-to-speech reader built with **Rust** and **Tauri v2**, powered locally by **Gradium Phonon 31M** (`gradium/phonon-31m-en` via `ptts`) across 37 English voices, with optional local **Qwen3-TTS** voice cloning.
 
-No Python runtime, account, or cloud TTS API is required — models and voices download locally into a portable `BookReader_Data/` folder next to `BookReader.exe`.
+No Python runtime, account, or cloud TTS API is required — models and voices download locally into a portable `BookReader_Data/` folder right next to `BookReader.exe` (Windows) or `BookReader.app` (macOS).
 
-**[Download BookReader.exe (Windows x64 — Latest Release)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · [View Release (`v1.0.0`)](https://github.com/revisionhiep-create/BookReader/releases/latest)
+**[Download Windows (`BookReader.exe`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · **[Download macOS Apple Silicon (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-arm64-portable.dmg)** · **[Download macOS Intel (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-x64-portable.dmg)** · [View Releases](https://github.com/revisionhiep-create/BookReader/releases/latest)
 
 ---
 
-## Quick Start for Windows Users (BookReader.exe)
+## Platform Folders
 
-- **Requirements**: Windows 10 or Windows 11 (64-bit). Microsoft Edge WebView2 is preinstalled on Windows 10/11 (if missing on an older Windows 10 install, get the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)). No NVIDIA GPU or CUDA installation is required to launch or read — built-in voices run smoothly on CPU, and optional Qwen3-TTS voice cloning automatically uses NVIDIA CUDA if installed and falls back to CPU otherwise.
+Platform-specific configs, build/test scripts, docs, and binaries are separated into dedicated folders while sharing the unified frontend (`src/`) and Rust backend (`src-tauri/`):
 
-1. **Download & Place in Its Own Folder**
-   - Download **[BookReader.exe (direct download)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** from the [GitHub Releases page](https://github.com/revisionhiep-create/BookReader/releases/latest) (also available in [v1.0.0](https://github.com/revisionhiep-create/BookReader/releases/tag/v1.0.0)).
-   - Put `BookReader.exe` inside its own dedicated folder (for example, `C:\BookReader\BookReader.exe`) rather than loosely on your Desktop or in `Downloads`, because BookReader creates a portable `BookReader_Data\` folder right beside the `.exe` for models, voices, and imported books.
+- **`windows/`** — Windows build script (`windows/build.ps1`), Tauri overlay config, standalone `windows/BookReader.exe`, and [Windows Quick Start (`windows/README.md`)](windows/README.md)
+- **`macos/`** — macOS portable `.dmg` packager (`macos/build_portable_dmg.sh`), macOS feature verification suite (`macos/test_macos_features.sh`), Tauri overlay config, and [macOS Quick Start (`macos/README.md`)](macos/README.md)
 
-2. **First Launch (Windows SmartScreen)**
-   - Double-click `BookReader.exe`. Because this is an unsigned standalone build, Windows Defender SmartScreen may display **"Windows protected your PC"**. Click **More info** → **Run anyway**.
+---
 
-3. **First-Time Voice Engine Setup**
-   - On first launch, a **First-Time Voice Engine Setup** popup appears. Click **Download Phonon 31M (~65 MB)** and wait for the 4 model files to finish downloading into `BookReader_Data\models\`.
+## Quick Start
 
-4. **Open a Book & Listen**
-   - Click **Import Book** (or open **Library** in the left sidebar) and select a **PDF**, **EPUB**, **DOCX**, or **TXT** file.
-   - Click any sentence to jump directly to it, or press `Space` (or click the **Play** button in the top toolbar) to start/pause narration.
-   - **Note on Startup Warmup**: When reopening BookReader to a large PDF or starting playback for the first time in a session, a top status banner displays model warmup and page indexing progress (typically ~10–15 seconds) before jumping straight to your auto-saved reading position.
+### Windows (`BookReader.exe`)
+See [windows/README.md](windows/README.md) for full details.
+- Put `BookReader.exe` inside its own dedicated folder (e.g., `C:\BookReader\BookReader.exe`).
+- On first launch, Windows SmartScreen may show **"Windows protected your PC"** — click **More info** → **Run anyway**.
 
-5. **Switch Voices or Clone a Custom Voice**
-   - Click the voice button in the top toolbar to choose from 37 built-in English male and female voices.
-   - Open **Voice Cloning** in the left sidebar to clone a custom voice from a **3–30 second** audio clip (5–15 seconds recommended) with an optional reference transcript for higher accuracy. Choose between **0.6B-Base (Fast, ~2.5 GB)** and **1.7B-Base (Best Quality, ~4.5 GB)**.
+### macOS Portable (`BookReader.app` via `.dmg`)
+See [macos/README.md](macos/README.md) for full details.
+- Open the `.dmg` for your Mac (**Apple Silicon `arm64`** or **Intel `x64`**) and drag `BookReader.app` into its own writable folder (e.g., `~/BookReader/`).
+- On first launch (unsigned build), **Right-click** `BookReader.app` → **Open** → **Open** (or run `xattr -cr /path/to/BookReader.app`).
+- Portable `BookReader_Data/` is created beside `BookReader.app` (falling back automatically to `~/Library/Application Support/Bookreader/BookReader_Data/` if launched from `/Applications` or a read-only disk image).
 
-6. **Reading Controls & Pronunciation Tips**
-   - Toggle **Closed Captions (CC)** in the top toolbar and adjust caption text size with `A-` / `21px` / `A+`.
-   - Zoom pages with `-` / `100%` / `+` or `Ctrl + Mouse Wheel`, toggle **Dark Page** in Dark Mode to invert bright PDF pages, and use the **Header & Footer Ignore Margins** toolbar button on PDFs to drag blurred ignore lines over running headers and page numbers.
-   - In **Pronunciation** / **Ignore Words** (left sidebar), all saved rules are active automatically. Enter a word and a natural English phonetic replacement (e.g., `gacha` → `gotcha` or `gah-chah`), test it with the `▶` preview button, and click **Add** / **Update** (or press `Enter`) to save. Leave **Use Regex** unchecked for plain words.
-
-7. **Updating to a Newer Version**
-   - Close BookReader and replace `BookReader.exe` in your folder with the new `BookReader.exe`. Your `BookReader_Data\` folder and `%APPDATA%\Bookreader\` settings, rules, and bookmarks remain intact.
+### First-Time Setup & Reading
+1. **First-Time Voice Engine Setup**: Click **Download Phonon 31M (~65 MB)** to install the 4 core model files into `BookReader_Data/models/`.
+2. **Open a Book & Listen**: Click **Import Book** (or open **Library**) and pick a **PDF**, **EPUB**, **DOCX**, or **TXT** file. Click any sentence to jump, or press `Space` to Play/Pause.
+3. **Switch Voices or Clone a Custom Voice**: Choose from 37 built-in English voices, or open **Voice Cloning** (`0.6B-Base` ~2.5 GB or `1.7B-Base` ~4.5 GB) with a 3–30s audio clip (uses NVIDIA CUDA on Windows if available, Apple Metal GPU on Apple Silicon, or CPU fallback).
+4. **Controls**: Toggle **Closed Captions (CC)** (`A-`/`21px`/`A+`), zoom with `Ctrl`/`⌘` + `+/-` or `Ctrl`/`⌘` + Wheel, toggle **Dark Page** on PDFs, and drag **Header & Footer Ignore Margins** on PDFs.
 
 ---
 
@@ -75,11 +72,11 @@ No Python runtime, account, or cloud TTS API is required — models and voices d
 | --- | --- |
 | `Space` | Play / Pause narration |
 | `Left Arrow` / `Right Arrow` | Previous / Next sentence |
-| `Ctrl + F` | Open document search |
-| `Ctrl + =` / `Ctrl + +` | Zoom page in |
-| `Ctrl + -` | Zoom page out |
-| `Ctrl + 0` | Reset page zoom to `100%` |
-| `Ctrl + Mouse Wheel` | Smooth zoom over reader viewport |
+| `Ctrl + F` / `⌘ + F` | Open document search |
+| `Ctrl + =` / `⌘ + =` | Zoom page in |
+| `Ctrl + -` / `⌘ + -` | Zoom page out |
+| `Ctrl + 0` / `⌘ + 0` | Reset page zoom to `100%` |
+| `Ctrl + Wheel` / `⌘ + Wheel` | Smooth zoom over reader viewport |
 
 *(Shortcuts do not hijack typing when an input field or modal dialog is focused.)*
 
@@ -89,47 +86,20 @@ No Python runtime, account, or cloud TTS API is required — models and voices d
 
 BookReader automatically initializes two folders:
 
-- **Portable Assets** (`BookReader_Data/` next to `BookReader.exe` in release builds, or in the workspace root during dev):
+- **Portable Assets** (`BookReader_Data/` next to `BookReader.exe` or `BookReader.app` in release builds, or in the workspace root during dev):
   - `BookReader_Data/models/phonon-31m-en/` — downloaded Phonon 31M weights and tokenizer files
   - `BookReader_Data/models/qwen3-tts-0.6b-base/` — downloaded Qwen3-TTS 0.6B-Base weights and 12Hz speech tokenizer (Fast, ~2.5 GB)
   - `BookReader_Data/models/qwen3-tts-1.7b-base/` — downloaded Qwen3-TTS 1.7B-Base weights and 12Hz speech tokenizer (Best Quality, ~4.5 GB)
   - `BookReader_Data/voices/` — downloaded voice conditioning audio files and `cloned/` custom voice prompts
   - `BookReader_Data/books/` — imported copies of your books and cached assets
-- **User Preferences** (`%APPDATA%\Bookreader\` on Windows):
+- **User Preferences** (`%APPDATA%\Bookreader\` on Windows, `~/Library/Application Support/Bookreader/` on macOS):
   - Saved immediately on every setting change: theme, voice, speed, typography, zoom, caption font size, pause durations, dark PDF page state, pronunciation rules, ignore rules, library reading progress/bookmarks, and saved desktop window geometry (`window_state.json`).
 
 ---
 
-## Building from Source (Windows)
+## Building from Source
 
-### Prerequisites
-
-- [Rust toolchain](https://rustup.rs/) (2024 edition)
-- [Visual Studio 2022 C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (Desktop development with C++)
-- [Node.js](https://nodejs.org/) (LTS) and npm
-- Microsoft Edge WebView2 Runtime (preinstalled on Windows 10/11)
-- Optional: NVIDIA CUDA Toolkit if building the default `qwen-cuda` feature from source (CUDA DLLs are delay-loaded so the compiled `BookReader.exe` still launches and runs cleanly on CPU-only PCs)
-
-### Setup & Commands
-
-```powershell
-# Install frontend dependencies
-npm install
-
-# Run in development mode (hot-reloads Vite + Tauri backend)
-npm run tauri dev
-
-# Verify frontend TypeScript & Vite bundle
-npm run build
-
-# Run Rust backend unit tests
-cargo test --manifest-path src-tauri/Cargo.toml
-
-# Build standalone release executable
-npx tauri build --no-bundle
-```
-
-The compiled executable is emitted to `src-tauri\target\release\BookReader.exe` (and copied to `BookReader.exe` in the repository root for release convenience).
+See [windows/README.md](windows/README.md) for Windows build instructions and [macos/README.md](macos/README.md) for macOS `.app` & `.dmg` build and feature-testing instructions.
 
 ---
 

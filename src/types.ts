@@ -199,6 +199,8 @@ export interface AppBootstrap {
   qwen_device_label: string;
   appdata_dir: string;
   data_dir: string;
+  media_base_url: string;
+  platform: "windows" | "macos" | "linux";
   settings: Settings;
   library: BookMeta[];
   pronunciations: PronunciationRule[];

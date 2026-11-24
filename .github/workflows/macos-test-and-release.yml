@@ -1,0 +1,124 @@
+name: Build, Test macOS & Publish Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-test-macos:
+    name: macOS Portable (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            dmg: BookReader-1.1.0-macos-arm64-portable.dmg
+          - arch: x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            dmg: BookReader-1.1.0-macos-x64-portable.dmg
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.arch }}-${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build portable macOS .app and .dmg
+        run: |
+          chmod +x macos/*.sh
+          ./macos/build_portable_dmg.sh "${{ matrix.target }}" "${{ matrix.dmg }}"
+
+      - name: Test all macOS features & mounted DMG behavior
+        run: ./macos/test_macos_features.sh "${{ matrix.target }}" "${{ matrix.dmg }}"
+
+      - name: Upload portable macOS DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-${{ matrix.arch }}
+          path: macos/dist/${{ matrix.dmg }}
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-and-test-macos
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download macOS ARM64 DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg-arm64
+          path: release-assets
+
+      - name: Download macOS x64 DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg-x64
+          path: release-assets
+
+      - name: Stage Windows portable executable
+        run: |
+          test -f windows/BookReader.exe
+          cp windows/BookReader.exe release-assets/BookReader.exe
+          ls -lh release-assets
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          cat > release-notes.md <<EOF
+          ## BookReader ${TAG}
+
+          Portable offline desktop text-to-speech reader powered by **Phonon 31M** (37 English voices) and local **Qwen3-TTS** voice cloning.
+
+          ### Downloads
+          - **Windows (x64 Portable)**: \`BookReader.exe\` — place in its own folder (creates \`BookReader_Data/\` next to it). See [windows/README.md](windows/README.md).
+          - **macOS Apple Silicon (M1–M4, Portable)**: \`BookReader-1.1.0-macos-arm64-portable.dmg\` — drag \`BookReader.app\` into its own folder (creates \`BookReader_Data/\` next to it). See [macos/README.md](macos/README.md).
+          - **macOS Intel (x64, Portable)**: \`BookReader-1.1.0-macos-x64-portable.dmg\` — drag \`BookReader.app\` into its own folder.
+
+          > **First-launch note:** These standalone builds are unsigned. On Windows click **More info → Run anyway**; on macOS **Right-click → Open** (or run \`xattr -cr BookReader.app\`).
+          EOF
+          sed -i 's/^          //' release-notes.md
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+            gh release edit "$TAG" --notes-file release-notes.md
+          else
+            gh release create "$TAG" release-assets/* \
+              --title "BookReader ${TAG}" \
+              --notes-file release-notes.md
+          fi

@@ -149,6 +149,10 @@ def main() -> None:
     # Multi-resolution Windows .ico for crisp taskbar, Alt+Tab, and Explorer rendering
     ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     icon_512.save(OUT_DIR / "icon.ico", format="ICO", sizes=ico_sizes)
+
+    # Multi-resolution macOS .icns from 1024x1024 master
+    icon_1024 = render_icon(1024)
+    icon_1024.save(OUT_DIR / "icon.icns", format="ICNS")
     print(f"Generated icons in {OUT_DIR}")
 
 

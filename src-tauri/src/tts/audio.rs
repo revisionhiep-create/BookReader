@@ -273,16 +273,21 @@ struct AudioShared {
     volume_bits: AtomicU32,
     speed_bits: AtomicU32,
     device_sample_rate: AtomicU32,
+    output_ready: AtomicBool,
+    last_error: Mutex<Option<String>>,
 }
 
 /// Handle to the background `cpal` audio playback stream.
 pub struct AudioOutput {
     shared: Arc<AudioShared>,
     stretcher: WsolaStretcher,
+    retry_tx: Option<std::sync::mpsc::SyncSender<std::sync::mpsc::SyncSender<Result<(), String>>>>,
 }
 
 impl AudioOutput {
-    /// Starts the dedicated audio playback thread and opens the default output device.
+    /// Starts the dedicated audio playback thread and attempts to open the default output device.
+    /// If no audio device is available yet (e.g. speakerless Mac or disconnected headphones),
+    /// startup still succeeds cleanly in standby mode and retries on [`Self::ensure_stream_ready`].
     pub fn start(initial_speed: f32, initial_volume: f32) -> Result<Self, String> {
         let shared = Arc::new(AudioShared {
             state: Mutex::new(QueueState::default()),
@@ -291,28 +296,70 @@ impl AudioOutput {
             volume_bits: AtomicU32::new(initial_volume.clamp(0.0, 1.0).to_bits()),
             speed_bits: AtomicU32::new(initial_speed.clamp(0.5, 3.0).to_bits()),
             device_sample_rate: AtomicU32::new(48_000),
+            output_ready: AtomicBool::new(false),
+            last_error: Mutex::new(None),
         });
 
-        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let (retry_tx, retry_rx) = std::sync::mpsc::sync_channel::<
+            std::sync::mpsc::SyncSender<Result<(), String>>,
+        >(4);
         let thread_shared = Arc::clone(&shared);
 
         std::thread::Builder::new()
             .name("bookreader-audio".to_string())
             .spawn(move || {
-                if let Err(err) = run_audio_thread(thread_shared, ready_tx) {
-                    tracing::error!(error = %err, "Audio thread terminated");
-                }
+                run_audio_thread(thread_shared, ready_tx, retry_rx);
             })
             .map_err(|e| format!("Failed spawning audio thread: {e}"))?;
 
         ready_rx
             .recv()
-            .map_err(|_| "Audio initialization channel closed".to_string())??;
+            .map_err(|_| "Audio initialization channel closed".to_string())?;
 
         Ok(Self {
             shared,
             stretcher: WsolaStretcher::new(MODEL_SAMPLE_RATE),
+            retry_tx: Some(retry_tx),
         })
+    }
+
+    /// Creates a headless [`AudioOutput`] with no OS audio thread (for unit & self tests).
+    pub fn new_headless(initial_speed: f32, initial_volume: f32) -> Self {
+        Self {
+            shared: Arc::new(AudioShared {
+                state: Mutex::new(QueueState::default()),
+                paused: AtomicBool::new(true),
+                generation: AtomicU64::new(1),
+                volume_bits: AtomicU32::new(initial_volume.clamp(0.0, 1.0).to_bits()),
+                speed_bits: AtomicU32::new(initial_speed.clamp(0.5, 3.0).to_bits()),
+                device_sample_rate: AtomicU32::new(48_000),
+                output_ready: AtomicBool::new(false),
+                last_error: Mutex::new(None),
+            }),
+            stretcher: WsolaStretcher::new(MODEL_SAMPLE_RATE),
+            retry_tx: None,
+        }
+    }
+
+    pub fn is_output_ready(&self) -> bool {
+        self.shared.output_ready.load(Ordering::Acquire)
+    }
+
+    /// Ensures the OS audio output stream is open, retrying initialization if no device was ready at launch.
+    pub fn ensure_stream_ready(&self) -> Result<(), String> {
+        if self.is_output_ready() {
+            return Ok(());
+        }
+        let Some(ref tx) = self.retry_tx else {
+            return Err("No audio output device available".to_string());
+        };
+        let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(ack_tx)
+            .map_err(|_| "Audio thread is not running".to_string())?;
+        ack_rx
+            .recv()
+            .map_err(|_| "Audio thread did not respond".to_string())?
     }
 
     pub fn generation(&self) -> u64 {
@@ -449,27 +496,14 @@ impl AudioOutput {
     }
 }
 
-fn run_audio_thread(
-    shared: Arc<AudioShared>,
-    ready_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
-) -> Result<(), String> {
+fn open_output_stream(shared: &Arc<AudioShared>) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
-    let device = match host.default_output_device() {
-        Some(d) => d,
-        None => {
-            let err = "No default audio output device found".to_string();
-            let _ = ready_tx.send(Err(err.clone()));
-            return Err(err);
-        }
-    };
-    let supported = match device.default_output_config() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            let err = format!("Failed querying audio device config: {e}");
-            let _ = ready_tx.send(Err(err.clone()));
-            return Err(err);
-        }
-    };
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| "No default audio output device found".to_string())?;
+    let supported = device
+        .default_output_config()
+        .map_err(|e| format!("Failed querying audio device config: {e}"))?;
 
     let sample_format = supported.sample_format();
     let config: StreamConfig = supported.into();
@@ -478,32 +512,67 @@ fn run_audio_thread(
         .store(config.sample_rate.max(8000), Ordering::Release);
 
     let stream = match sample_format {
-        SampleFormat::F32 => build_typed_stream::<f32>(&device, config, Arc::clone(&shared)),
-        SampleFormat::I16 => build_typed_stream::<i16>(&device, config, Arc::clone(&shared)),
-        SampleFormat::I32 => build_typed_stream::<i32>(&device, config, Arc::clone(&shared)),
-        SampleFormat::U16 => build_typed_stream::<u16>(&device, config, Arc::clone(&shared)),
+        SampleFormat::F32 => build_typed_stream::<f32>(&device, config, Arc::clone(shared)),
+        SampleFormat::I16 => build_typed_stream::<i16>(&device, config, Arc::clone(shared)),
+        SampleFormat::I32 => build_typed_stream::<i32>(&device, config, Arc::clone(shared)),
+        SampleFormat::U16 => build_typed_stream::<u16>(&device, config, Arc::clone(shared)),
         other => Err(format!("Unsupported output sample format: {other}")),
-    };
+    }?;
 
-    let stream = match stream {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = ready_tx.send(Err(e.clone()));
-            return Err(e);
+    stream
+        .play()
+        .map_err(|e| format!("Failed starting audio output stream: {e}"))?;
+
+    Ok(stream)
+}
+
+fn run_audio_thread(
+    shared: Arc<AudioShared>,
+    ready_tx: std::sync::mpsc::SyncSender<()>,
+    retry_rx: std::sync::mpsc::Receiver<std::sync::mpsc::SyncSender<Result<(), String>>>,
+) {
+    let mut active_stream: Option<cpal::Stream> = match open_output_stream(&shared) {
+        Ok(stream) => {
+            shared.output_ready.store(true, Ordering::Release);
+            *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            Some(stream)
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "Audio output unavailable at startup; entering standby mode");
+            shared.output_ready.store(false, Ordering::Release);
+            *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
+            None
         }
     };
 
-    if let Err(e) = stream.play() {
-        let err = format!("Failed starting audio output stream: {e}");
-        let _ = ready_tx.send(Err(err.clone()));
-        return Err(err);
+    let _ = ready_tx.send(());
+
+    if active_stream.is_none() {
+        while let Ok(ack_tx) = retry_rx.recv() {
+            match open_output_stream(&shared) {
+                Ok(stream) => {
+                    shared.output_ready.store(true, Ordering::Release);
+                    *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    active_stream = Some(stream);
+                    let _ = ack_tx.send(Ok(()));
+                    break;
+                }
+                Err(err) => {
+                    shared.output_ready.store(false, Ordering::Release);
+                    *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.clone());
+                    let _ = ack_tx.send(Err(err));
+                }
+            }
+        }
     }
 
-    let _ = ready_tx.send(Ok(()));
+    if active_stream.is_none() {
+        return;
+    }
 
     // Keep the !Send cpal::Stream alive on this dedicated thread for app lifetime
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(60));
+    while let Ok(ack_tx) = retry_rx.recv() {
+        let _ = ack_tx.send(Ok(()));
     }
 }
 
@@ -644,22 +713,6 @@ fn fill_output_buffer<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    impl AudioOutput {
-        fn new_headless(initial_speed: f32, initial_volume: f32) -> Self {
-            Self {
-                shared: Arc::new(AudioShared {
-                    state: Mutex::new(QueueState::default()),
-                    paused: AtomicBool::new(true),
-                    generation: AtomicU64::new(1),
-                    volume_bits: AtomicU32::new(initial_volume.to_bits()),
-                    speed_bits: AtomicU32::new(initial_speed.to_bits()),
-                    device_sample_rate: AtomicU32::new(48_000),
-                }),
-                stretcher: WsolaStretcher::new(MODEL_SAMPLE_RATE),
-            }
-        }
-    }
 
     #[test]
     fn flush_bumps_generation_clears_queue_and_rejects_stale_segments() {

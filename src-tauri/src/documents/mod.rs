@@ -14,10 +14,23 @@ use std::path::Path;
 use tauri::http::{Request, Response, StatusCode, header};
 use zip::ZipArchive;
 
-/// Generates a WebView2-compatible custom protocol URL for book files and embedded images.
+/// Returns the platform-appropriate custom protocol base URL (`http://bookmedia.localhost` on Windows,
+/// `bookmedia://localhost` on macOS/Linux WKWebView).
+pub fn media_base_url() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "http://bookmedia.localhost"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "bookmedia://localhost"
+    }
+}
+
+/// Generates a WebView-compatible custom protocol URL for book files and embedded images.
 pub fn media_url(kind: &str, book_id: &str, rel_path: &str) -> String {
     let clean = rel_path.trim_start_matches('/');
-    format!("http://bookmedia.localhost/{kind}/{book_id}/{clean}")
+    format!("{}/{kind}/{book_id}/{clean}", media_base_url())
 }
 
 /// Copies an external book into `BookReader_Data/books/` and registers it in `library.json`.
@@ -93,6 +106,23 @@ pub fn handle_media_request(
     storage: &Storage,
     request: &Request<Vec<u8>>,
 ) -> Response<Vec<u8>> {
+    if request.method() == tauri::http::Method::OPTIONS {
+        return Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, HEAD, OPTIONS")
+            .header(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                "Range, Content-Type, Accept, Origin",
+            )
+            .header(
+                header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                "Accept-Ranges, Content-Length, Content-Range",
+            )
+            .body(Vec::new())
+            .unwrap();
+    }
+
     let uri_path = request.uri().path().trim_start_matches('/');
     let mut parts = uri_path.splitn(3, '/');
     let kind = parts.next().unwrap_or("");
@@ -122,6 +152,7 @@ fn serve_file_with_ranges(path: &Path, request: &Request<Vec<u8>>) -> Response<V
     };
     let total_len = meta.len();
     let mime = guess_mime(path.to_str().unwrap_or(""));
+    let is_head = request.method() == tauri::http::Method::HEAD;
 
     if let Some(range_hdr) = request
         .headers()
@@ -130,10 +161,15 @@ fn serve_file_with_ranges(path: &Path, request: &Request<Vec<u8>>) -> Response<V
         && let Some((start, end)) = parse_byte_range(range_hdr, total_len)
     {
         let chunk_len = (end - start + 1) as usize;
-        let mut buf = vec![0u8; chunk_len];
-        if file.seek(SeekFrom::Start(start)).is_err() || file.read_exact(&mut buf).is_err() {
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Read error");
-        }
+        let buf = if is_head {
+            Vec::new()
+        } else {
+            let mut b = vec![0u8; chunk_len];
+            if file.seek(SeekFrom::Start(start)).is_err() || file.read_exact(&mut b).is_err() {
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Read error");
+            }
+            b
+        };
         return Response::builder()
             .status(StatusCode::PARTIAL_CONTENT)
             .header(header::CONTENT_TYPE, mime)
@@ -144,20 +180,33 @@ fn serve_file_with_ranges(path: &Path, request: &Request<Vec<u8>>) -> Response<V
                 format!("bytes {start}-{end}/{total_len}"),
             )
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header(
+                header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                "Accept-Ranges, Content-Length, Content-Range",
+            )
             .body(buf)
             .unwrap();
     }
 
-    let mut buf = Vec::with_capacity(total_len as usize);
-    if file.read_to_end(&mut buf).is_err() {
-        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Read error");
-    }
+    let buf = if is_head {
+        Vec::new()
+    } else {
+        let mut b = Vec::with_capacity(total_len as usize);
+        if file.read_to_end(&mut b).is_err() {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Read error");
+        }
+        b
+    };
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, total_len.to_string())
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            "Accept-Ranges, Content-Length, Content-Range",
+        )
         .body(buf)
         .unwrap()
 }
@@ -362,6 +411,63 @@ mod tests {
         assert_eq!(ent_doc.sentences.len(), 2);
         assert!(ent_doc.sentences[0].text.contains("Wait—what?"));
         assert!(ent_doc.sentences[1].text.contains("She smiled &custom; ran."));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bookmedia_protocol_handles_options_ranges_zip_images_and_404() {
+        let root =
+            std::env::temp_dir().join(format!("bookreader_media_test_{}", uuid::Uuid::new_v4()));
+        let paths = AppPaths::from_roots(root.join("appdata"), root.join("data")).unwrap();
+        let storage = Storage::load(paths.clone()).unwrap();
+
+        let pdf_src = root.join("sample.pdf");
+        fs::write(&pdf_src, b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n").unwrap();
+        let book = import_book(&pdf_src, &storage).unwrap();
+
+        // OPTIONS preflight
+        let opts_req = Request::builder()
+            .method(tauri::http::Method::OPTIONS)
+            .uri(format!("{}/book/{}", media_base_url(), book.id))
+            .body(Vec::new())
+            .unwrap();
+        let opts_resp = handle_media_request(&paths, &storage, &opts_req);
+        assert_eq!(opts_resp.status(), StatusCode::NO_CONTENT);
+        assert!(opts_resp.headers().contains_key(header::ACCESS_CONTROL_EXPOSE_HEADERS));
+
+        // Partial byte range (used by PDF.js streaming)
+        let range_req = Request::builder()
+            .method(tauri::http::Method::GET)
+            .uri(format!("{}/book/{}", media_base_url(), book.id))
+            .header(header::RANGE, "bytes=0-7")
+            .body(Vec::new())
+            .unwrap();
+        let range_resp = handle_media_request(&paths, &storage, &range_req);
+        assert_eq!(range_resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(range_resp.body(), b"%PDF-1.4");
+        assert!(range_resp.headers().contains_key(header::CONTENT_RANGE));
+
+        // HEAD request
+        let head_req = Request::builder()
+            .method(tauri::http::Method::HEAD)
+            .uri(format!("{}/book/{}", media_base_url(), book.id))
+            .body(Vec::new())
+            .unwrap();
+        let head_resp = handle_media_request(&paths, &storage, &head_req);
+        assert_eq!(head_resp.status(), StatusCode::OK);
+        assert!(head_resp.body().is_empty());
+
+        // Missing book returns 404
+        let missing_req = Request::builder()
+            .method(tauri::http::Method::GET)
+            .uri(format!("{}/book/does-not-exist", media_base_url()))
+            .body(Vec::new())
+            .unwrap();
+        assert_eq!(
+            handle_media_request(&paths, &storage, &missing_req).status(),
+            StatusCode::NOT_FOUND
+        );
 
         let _ = fs::remove_dir_all(root);
     }

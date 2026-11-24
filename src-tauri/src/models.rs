@@ -558,6 +558,8 @@ pub struct AppBootstrap {
     pub qwen_device_label: String,
     pub appdata_dir: String,
     pub data_dir: String,
+    pub media_base_url: String,
+    pub platform: String,
     pub settings: Settings,
     pub library: Vec<BookMeta>,
     pub pronunciations: Vec<PronunciationRule>,

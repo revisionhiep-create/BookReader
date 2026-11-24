@@ -35,16 +35,19 @@ export function closeToolbarPopovers(): void {
 export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): void {
   mountedContainer = container;
   mountedHandlers = handlers;
+  const isMac =
+    state.bootstrap?.platform === "macos" || /Mac/i.test(navigator.platform);
+  const modKey = isMac ? "⌘" : "Ctrl";
 
   container.innerHTML = `
     <div class="topbar">
       <div class="toolbar-group">
         <button class="icon-btn" id="btn-sidebar-expand" title="Open sidebar">${Icons.sidebarToggle()}</button>
         <button class="icon-btn" id="btn-add-bookmark" title="Bookmark current position">${Icons.bookmark(false)}</button>
-        <div class="toolbar-segmented" id="grp-page-zoom" title="Page Zoom (Ctrl +/- / Ctrl+Wheel)">
-          <button class="seg-btn" id="btn-zoom-out" title="Zoom out (Ctrl+-)">${Icons.zoomOut()}</button>
+        <div class="toolbar-segmented" id="grp-page-zoom" title="Page Zoom (${modKey} +/- / ${modKey}+Wheel)">
+          <button class="seg-btn" id="btn-zoom-out" title="Zoom out (${modKey}+-)">${Icons.zoomOut()}</button>
           <button class="seg-val" id="btn-zoom-reset" title="Reset page zoom to 100%">100%</button>
-          <button class="seg-btn" id="btn-zoom-in" title="Zoom in (Ctrl++)">${Icons.zoomIn()}</button>
+          <button class="seg-btn" id="btn-zoom-in" title="Zoom in (${modKey}++)">${Icons.zoomIn()}</button>
         </div>
         <button class="toolbar-chip" id="btn-pdf-dark-page" title="Invert white PDF pages in dark mode">Dark Page</button>
       </div>
@@ -81,7 +84,7 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
           <button class="seg-val" id="btn-cc-size-reset" title="Reset caption size to 21px">21px</button>
           <button class="seg-btn" id="btn-cc-larger" title="Larger captions">A+</button>
         </div>
-        <button class="icon-btn" id="btn-search-toggle" title="Search document (Ctrl+F)">
+        <button class="icon-btn" id="btn-search-toggle" title="Search document (${modKey}+F)">
           ${Icons.search()}
         </button>
         <button class="icon-btn" id="btn-margins-toggle" title="Header & Footer Ignore Margins (PDF)">

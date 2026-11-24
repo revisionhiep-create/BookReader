@@ -6,7 +6,10 @@ dist/
 BookReader_Data/
 Bookreader/
 *.exe
-!/BookReader.exe
+!/windows/BookReader.exe
+*.dmg
+macos/dist/
+macos/staging/
 *.pdb
 .DS_Store
 Thumbs.db

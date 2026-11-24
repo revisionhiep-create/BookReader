@@ -1,9 +1,11 @@
-//! Windows system media keys integration via `souvlaki` (Play/Pause/Next/Prev).
+//! OS system media keys integration via `souvlaki` (Play/Pause/Next/Prev).
 
 use crate::tts::TtsController;
 use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 
 pub struct MediaKeysBridge {
     controls: Mutex<Option<MediaControls>>,
@@ -18,7 +20,7 @@ impl MediaKeysBridge {
     }
 
     pub fn update_status(&self, title: Option<&str>, playing: bool, paused: bool) {
-        let mut guard = self.controls.lock().unwrap();
+        let mut guard = self.controls.lock().unwrap_or_else(|e| e.into_inner());
         let Some(ctrl) = guard.as_mut() else {
             return;
         };
@@ -40,7 +42,7 @@ impl MediaKeysBridge {
     }
 }
 
-fn create_controls(app: &AppHandle, tts: Arc<TtsController>) -> Option<MediaControls> {
+fn create_controls(#[allow(unused_variables)] app: &AppHandle, tts: Arc<TtsController>) -> Option<MediaControls> {
     #[cfg(target_os = "windows")]
     let hwnd = app
         .get_webview_window("main")

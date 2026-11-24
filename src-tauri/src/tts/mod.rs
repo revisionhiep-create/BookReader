@@ -260,6 +260,12 @@ impl TtsController {
         if total == 0 {
             return;
         }
+        if let Err(err) = self.audio.ensure_stream_ready() {
+            self.audio.set_paused(true);
+            let mut s = self.session.write().unwrap();
+            s.transport = TransportState::Error(err);
+            return;
+        }
 
         self.audio.flush_and_bump_generation();
         self.audio.set_paused(false);
@@ -307,6 +313,12 @@ impl TtsController {
         }
         if !has_audio {
             self.play_from(cursor);
+            return;
+        }
+        if let Err(err) = self.audio.ensure_stream_ready() {
+            self.audio.set_paused(true);
+            let mut s = self.session.write().unwrap();
+            s.transport = TransportState::Error(err);
             return;
         }
         self.audio.set_paused(false);
@@ -467,6 +479,12 @@ impl TtsController {
     /// Plays pre-rendered 24 kHz mono PCM through the preview slot, pausing active book narration.
     pub fn play_raw_preview_pcm(&self, pcm: Vec<f32>) {
         if pcm.is_empty() {
+            return;
+        }
+        if let Err(err) = self.audio.ensure_stream_ready() {
+            tracing::warn!(error = %err, "Audio output unavailable for preview");
+            let mut s = self.session.write().unwrap();
+            s.transport = TransportState::Error(err);
             return;
         }
         // Pause book playback cleanly while playing short preview

@@ -17,6 +17,10 @@ export function renderSettingsModal(
   const p = s.pauses;
   const san = s.sanitizer;
   const typ = s.typography;
+  const isMac =
+    state.bootstrap?.platform === "macos" || /Mac/i.test(navigator.platform);
+  const settingsDirLabel = isMac ? "Settings Folder" : "AppData Settings";
+  const openSettingsBtnLabel = isMac ? "Open Settings Folder" : "Open AppData Folder";
 
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
@@ -109,11 +113,11 @@ export function renderSettingsModal(
           <div class="setting-group">
             <strong>Storage Folders</strong>
             <div style="font-size:12px;color:var(--text-secondary);word-break:break-all;">
-              <div><strong>AppData Settings:</strong> ${escapeHtml(state.bootstrap?.appdata_dir ?? "")}</div>
+              <div><strong>${settingsDirLabel}:</strong> ${escapeHtml(state.bootstrap?.appdata_dir ?? "")}</div>
               <div><strong>Portable Data (Models/Voices/Books):</strong> ${escapeHtml(state.bootstrap?.data_dir ?? "")}</div>
             </div>
             <div style="display:flex;gap:8px;margin-top:4px;">
-              <button class="btn-secondary" id="btn-open-appdata">Open AppData Folder</button>
+              <button class="btn-secondary" id="btn-open-appdata">${openSettingsBtnLabel}</button>
               <button class="btn-secondary" id="btn-open-portable">Open BookReader_Data Folder</button>
             </div>
           </div>

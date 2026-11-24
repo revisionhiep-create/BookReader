@@ -14,7 +14,11 @@ const MIN_VISIBLE_OVERLAP_W_LOGICAL: f64 = 120.0;
 const MIN_VISIBLE_OVERLAP_H_LOGICAL: f64 = 80.0;
 const EST_CHROME_W_LOGICAL: f64 = 16.0;
 const EST_CHROME_H_LOGICAL: f64 = 40.0;
-const DWM_BORDER_SLOP_LOGICAL: f64 = 10.0;
+const DWM_BORDER_SLOP_LOGICAL: f64 = if cfg!(target_os = "windows") {
+    10.0
+} else {
+    0.0
+};
 const BOGUS_POS_THRESHOLD: i32 = -30_000;
 const MIN_VALID_CLIENT_DIM: u32 = 200;
 const SAVE_DEBOUNCE_MS: u64 = 350;
