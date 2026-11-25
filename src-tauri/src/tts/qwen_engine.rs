@@ -20,6 +20,8 @@ pub const QWEN_SAMPLE_RATE: u32 = 24_000;
 pub const MIN_REF_DURATION_SEC: f32 = 3.0;
 pub const RECOMMENDED_MAX_REF_SEC: f32 = 15.0;
 pub const HARD_MAX_REF_SEC: f32 = 30.0;
+pub const QWEN_MAX_CHUNK_CHARS: usize = crate::documents::sentence_split::MAX_SENTENCE_CHARS;
+const QWEN_INTER_CHUNK_SILENCE_MS: usize = 70;
 const REF_TRAILING_SILENCE_MS: usize = 120;
 const REF_EDGE_FADE_MS: usize = 10;
 
@@ -383,7 +385,8 @@ impl QwenCloneEngine {
         })
     }
 
-    /// Synthesizes one cleaned sentence into 24 kHz mono PCM using a saved cloned voice.
+    /// Synthesizes text into 24 kHz mono PCM using a saved cloned voice, automatically
+    /// sub-chunking oversized inputs so Qwen3-TTS never truncates against its token cap.
     pub fn synthesize(
         &self,
         paths: &AppPaths,
@@ -392,6 +395,11 @@ impl QwenCloneEngine {
         voice_id: &str,
         voice_meta: Option<&ClonedVoiceMeta>,
     ) -> Result<Vec<f32>, String> {
+        let chunks = chunk_text_for_qwen(text);
+        if chunks.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let loaded = self.ensure_loaded_locked(&mut guard, paths, variant)?;
 
@@ -455,29 +463,36 @@ impl QwenCloneEngine {
             loaded_prompt
         };
 
-        let est_tokens = text.chars().count().saturating_mul(6).clamp(160, 1024);
-        let opts = VoiceCloneOptions {
-            max_new_tokens: Some(est_tokens),
-            ..Default::default()
-        };
+        let mut chunk_pcms = Vec::with_capacity(chunks.len());
+        for chunk in &chunks {
+            let est_tokens = chunk.chars().count().saturating_mul(6).clamp(160, 1024);
+            let opts = VoiceCloneOptions {
+                max_new_tokens: Some(est_tokens),
+                ..Default::default()
+            };
 
-        let result = loaded
-            .model
-            .generate_voice_clone_from_text(text, &prompt, "english", Some(opts))
-            .map_err(|e| format!("Qwen3-TTS synthesis failed: {e}"))?;
+            let result = loaded
+                .model
+                .generate_voice_clone_from_text(chunk, &prompt, "english", Some(opts))
+                .map_err(|e| format!("Qwen3-TTS synthesis failed: {e}"))?;
 
-        let samples = result
-            .audio
-            .flatten_all()
-            .and_then(|t| t.to_dtype(DType::F32))
-            .and_then(|t| t.to_vec1::<f32>())
-            .map_err(|e| format!("Failed reading Qwen3-TTS audio output: {e}"))?;
+            let samples = result
+                .audio
+                .flatten_all()
+                .and_then(|t| t.to_dtype(DType::F32))
+                .and_then(|t| t.to_vec1::<f32>())
+                .map_err(|e| format!("Failed reading Qwen3-TTS audio output: {e}"))?;
 
-        if result.sample_rate != QWEN_SAMPLE_RATE as usize && result.sample_rate > 0 {
-            Ok(resample_linear(&samples, result.sample_rate as u32, QWEN_SAMPLE_RATE))
-        } else {
-            Ok(samples)
+            let resampled = if result.sample_rate != QWEN_SAMPLE_RATE as usize && result.sample_rate > 0
+            {
+                resample_linear(&samples, result.sample_rate as u32, QWEN_SAMPLE_RATE)
+            } else {
+                samples
+            };
+            chunk_pcms.push(resampled);
         }
+
+        Ok(stitch_qwen_chunks(chunk_pcms, QWEN_SAMPLE_RATE))
     }
 
     pub fn evict_cached_voice(&self, voice_id: &str) {
@@ -678,6 +693,47 @@ fn write_mono_wav_f32(path: &Path, samples: &[f32], sample_rate: u32) -> Result<
         .map_err(|e| format!("Failed finalizing WAV: {e}"))
 }
 
+/// Splits oversized text into safe Qwen3-TTS chunks (`<= QWEN_MAX_CHUNK_CHARS`), leaving
+/// normal-length inputs untouched.
+pub fn chunk_text_for_qwen(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if trimmed.chars().count() <= QWEN_MAX_CHUNK_CHARS {
+        return vec![trimmed.to_string()];
+    }
+    crate::documents::sentence_split::split_sentences_with_max_chars(
+        trimmed,
+        QWEN_MAX_CHUNK_CHARS,
+    )
+}
+
+/// Stitches synthesized Qwen3-TTS chunks cleanly with brief inter-chunk silence, leaving
+/// single-chunk outputs untouched.
+pub fn stitch_qwen_chunks(mut chunks: Vec<Vec<f32>>, sample_rate: u32) -> Vec<f32> {
+    if chunks.is_empty() {
+        return Vec::new();
+    }
+    if chunks.len() == 1 {
+        return chunks.pop().unwrap_or_default();
+    }
+
+    let gap_samples = (sample_rate.max(8000) as usize * QWEN_INTER_CHUNK_SILENCE_MS) / 1000;
+    let mut out = Vec::new();
+    for chunk in chunks {
+        let cleaned = crate::tts::pauses::trim_and_fade(&chunk, sample_rate);
+        if cleaned.is_empty() {
+            continue;
+        }
+        if !out.is_empty() && gap_samples > 0 {
+            out.resize(out.len() + gap_samples, 0.0);
+        }
+        out.extend_from_slice(&cleaned);
+    }
+    out
+}
+
 fn resample_linear(input: &[f32], from_sr: u32, to_sr: u32) -> Vec<f32> {
     if input.is_empty() || from_sr == 0 || from_sr == to_sr {
         return input.to_vec();
@@ -764,5 +820,39 @@ mod tests {
         engine.evict_cached_voice("clone_abc123");
         let pending = engine.pending_evictions.lock().unwrap();
         assert!(pending.contains("clone_abc123"));
+    }
+
+    #[test]
+    fn chunks_oversized_text_and_keeps_short_text_intact() {
+        assert!(chunk_text_for_qwen("   ").is_empty());
+
+        let short = "First sentence. Second sentence.";
+        assert_eq!(chunk_text_for_qwen(short), vec![short.to_string()]);
+
+        let long = std::iter::repeat_n("narration", 50)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(long.chars().count() > QWEN_MAX_CHUNK_CHARS);
+        let chunks = chunk_text_for_qwen(&long);
+        assert!(chunks.len() >= 2);
+        assert!(chunks.iter().all(|c| c.chars().count() <= QWEN_MAX_CHUNK_CHARS));
+        assert_eq!(chunks.join(" "), long);
+    }
+
+    #[test]
+    fn stitches_qwen_chunks_with_silence_and_leaves_single_chunk_untouched() {
+        assert!(stitch_qwen_chunks(Vec::new(), QWEN_SAMPLE_RATE).is_empty());
+
+        let single = vec![0.12_f32, -0.34, 0.56];
+        assert_eq!(
+            stitch_qwen_chunks(vec![single.clone()], QWEN_SAMPLE_RATE),
+            single
+        );
+
+        let a = sine_wave(0.25, QWEN_SAMPLE_RATE, 0.3, 0.0);
+        let b = sine_wave(0.25, QWEN_SAMPLE_RATE, 0.3, 0.0);
+        let stitched = stitch_qwen_chunks(vec![a.clone(), b.clone()], QWEN_SAMPLE_RATE);
+        let gap_len = (QWEN_SAMPLE_RATE as usize * QWEN_INTER_CHUNK_SILENCE_MS) / 1000;
+        assert!(stitched.len() > a.len() + gap_len);
     }
 }

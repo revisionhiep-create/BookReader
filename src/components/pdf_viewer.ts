@@ -966,11 +966,14 @@ function buildStitchedPdfSentences(lines: PdfLine[]): {
   return { sentences, rects };
 }
 
+const MAX_PDF_SENTENCE_CHARS = 320;
+const PDF_CLOSING_DELIMS = new Set(['"', "'", "”", "’", ")", "]", "}", "»", "」", "』", "】", "》", "）"]);
+
 function splitParagraphKeepOffsets(
   paragraph: string,
 ): Array<{ text: string; start: number; end: number }> {
   const out: Array<{ text: string; start: number; end: number }> = [];
-  const regex = /[^.!?]+(?:[.!?]+["'”’)\]]*|$)/g;
+  const regex = /[^.!?。！？]+(?:[.!?。！？]+["'”’)\]}»」』】》）]*|$)/g;
   let match: RegExpExecArray | null;
   let bufferStart = -1;
   let bufferText = "";
@@ -982,7 +985,11 @@ function splitParagraphKeepOffsets(
     const trailWs = rawText.length - rawText.trimEnd().length;
     const trimmedStart = rawStart + leadWs;
     const trimmedEnd = Math.max(trimmedStart, rawEnd - trailWs);
-    out.push({ text: trimmed, start: trimmedStart, end: trimmedEnd });
+    if (trimmed.length <= MAX_PDF_SENTENCE_CHARS) {
+      out.push({ text: trimmed, start: trimmedStart, end: trimmedEnd });
+    } else {
+      pushOversizedPdfSentence(paragraph, trimmedStart, trimmedEnd, out);
+    }
   };
 
   while ((match = regex.exec(paragraph)) !== null) {
@@ -1008,6 +1015,125 @@ function splitParagraphKeepOffsets(
     pushTrimmed(Math.max(0, bufferStart), paragraph.length, bufferText);
   }
   return out;
+}
+
+function pushOversizedPdfSentence(
+  paragraph: string,
+  start: number,
+  end: number,
+  out: Array<{ text: string; start: number; end: number }>,
+): void {
+  const trimBounds = (s: number, e: number): [number, number] | null => {
+    let lo = s;
+    let hi = e;
+    while (lo < hi && /\s/.test(paragraph[lo])) lo++;
+    while (hi > lo && /\s/.test(paragraph[hi - 1])) hi--;
+    return lo < hi ? [lo, hi] : null;
+  };
+
+  const safeMid = (s: number, e: number): number => {
+    let m = s + Math.floor((e - s) / 2);
+    if (m > s && m < e) {
+      const code = paragraph.charCodeAt(m);
+      if (code >= 0xdc00 && code <= 0xdfff) {
+        m = m > s + 1 ? m - 1 : m + 1;
+      }
+    }
+    return m;
+  };
+
+  const skipClosers = (idx: number, hi: number): number => {
+    let cur = idx;
+    while (cur + 1 < hi && PDF_CLOSING_DELIMS.has(paragraph[cur + 1])) {
+      cur++;
+    }
+    return cur;
+  };
+
+  const initial = trimBounds(start, end);
+  if (!initial) return;
+  const stack: Array<[number, number]> = [initial];
+
+  while (stack.length > 0) {
+    const [s, e] = stack.pop()!;
+    const trimmed = trimBounds(s, e);
+    if (!trimmed) continue;
+    const [lo, hi] = trimmed;
+    const len = hi - lo;
+    if (len <= MAX_PDF_SENTENCE_CHARS) {
+      out.push({ text: paragraph.slice(lo, hi), start: lo, end: hi });
+      continue;
+    }
+
+    const mid = safeMid(lo, hi);
+    const minSide = Math.max(1, Math.min(mid - lo, Math.floor(len / 4)));
+    const minSplit = lo + minSide;
+    const maxSplit = hi - minSide;
+
+    let bestStrong: { dist: number; idx: number } | null = null;
+    let bestComma: { dist: number; idx: number } | null = null;
+    let bestWs: { dist: number; idx: number } | null = null;
+
+    const consider = (
+      slot: { dist: number; idx: number } | null,
+      cand: number,
+    ): { dist: number; idx: number } | null => {
+      if (cand >= minSplit && cand <= maxSplit && cand > lo && cand < hi) {
+        const dist = Math.abs(cand - mid);
+        if (!slot || dist < slot.dist) {
+          return { dist, idx: cand };
+        }
+      }
+      return slot;
+    };
+
+    for (let i = lo; i < hi; i++) {
+      const ch = paragraph[i];
+      if (ch === ";" || ch === ":") {
+        const endClose = skipClosers(i, hi);
+        if (endClose + 1 < hi && /\s/.test(paragraph[endClose + 1])) {
+          bestStrong = consider(bestStrong, endClose + 1);
+        }
+      } else if (ch === "—" || ch === "–" || ch === "…") {
+        let endMark = i;
+        while (endMark + 1 < hi && "—–…".includes(paragraph[endMark + 1])) {
+          endMark++;
+        }
+        const endClose = skipClosers(endMark, hi);
+        bestStrong = consider(bestStrong, endClose + 1);
+      } else if (ch === "；" || ch === "：") {
+        const endClose = skipClosers(i, hi);
+        bestStrong = consider(bestStrong, endClose + 1);
+      } else if (ch === ",") {
+        const endClose = skipClosers(i, hi);
+        if (endClose + 1 < hi && /\s/.test(paragraph[endClose + 1])) {
+          bestComma = consider(bestComma, endClose + 1);
+        }
+      } else if (ch === "，" || ch === "、") {
+        const endClose = skipClosers(i, hi);
+        bestComma = consider(bestComma, endClose + 1);
+      } else if (/\s/.test(ch)) {
+        bestWs = consider(bestWs, i);
+      }
+    }
+
+    const chosen = bestStrong?.idx ?? bestComma?.idx ?? bestWs?.idx ?? mid;
+    let leftBounds = trimBounds(lo, chosen);
+    let rightBounds = trimBounds(chosen, hi);
+
+    if (
+      !leftBounds ||
+      !rightBounds ||
+      leftBounds[1] - leftBounds[0] >= len ||
+      rightBounds[1] - rightBounds[0] >= len
+    ) {
+      leftBounds = trimBounds(lo, mid) ?? [lo, mid];
+      rightBounds = trimBounds(mid, hi) ?? [mid, hi];
+    }
+
+    stack.push(rightBounds);
+    stack.push(leftBounds);
+  }
 }
 
 function findPreservedPdfCursor(

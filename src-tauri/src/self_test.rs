@@ -1,6 +1,7 @@
 //! Comprehensive runtime feature self-test executed inside the compiled release binary
 //! via `--self-test` or `--self-test-live-tts`.
 
+use crate::documents::sentence_split::{MAX_SENTENCE_CHARS, split_sentences};
 use crate::documents::{handle_media_request, import_book, load_non_pdf_document, media_base_url, media_url};
 use crate::downloader::DownloadManager;
 use crate::exporter::{AudioExportSink, SleepInhibitor};
@@ -16,7 +17,8 @@ use crate::tts::audio::{AudioOutput, MODEL_SAMPLE_RATE};
 use crate::tts::engine::PhononEngine;
 use crate::tts::pauses::{apply_clause_pause_boost, compute_trailing_pause_ms, trim_and_fade};
 use crate::tts::qwen_engine::{
-    QWEN_SAMPLE_RATE, QwenCloneEngine, classify_clip_duration, slice_and_normalize_reference,
+    QWEN_MAX_CHUNK_CHARS, QWEN_SAMPLE_RATE, QwenCloneEngine, chunk_text_for_qwen,
+    classify_clip_duration, slice_and_normalize_reference,
 };
 use crate::tts::wsola::WsolaStretcher;
 use crate::window_state::{MonitorInfo, Rect, resolve_initial_placement, resolve_window_placement};
@@ -357,7 +359,26 @@ fn run_inner(root: &Path, live_tts: bool) -> Result<(), String> {
             .collect();
         let (norm, dur) = slice_and_normalize_reference(&clip, QWEN_SAMPLE_RATE, Some(1.0), Some(6.0))?;
         ensure(!norm.is_empty() && (dur - 5.0).abs() < 0.1, "Reference slice duration mismatch")?;
-        Ok(format!("device=\"{label}\" | sliced={dur:.1}s"))
+
+        let long_unpunctuated = std::iter::repeat_n("sentence", 60).collect::<Vec<_>>().join(" ");
+        let doc_chunks = split_sentences(&long_unpunctuated);
+        let qwen_chunks = chunk_text_for_qwen(&long_unpunctuated);
+        ensure(
+            doc_chunks.len() >= 2
+                && doc_chunks.iter().all(|c| c.chars().count() <= MAX_SENTENCE_CHARS),
+            "Document long-sentence safeguard failed",
+        )?;
+        ensure(
+            qwen_chunks.len() >= 2
+                && qwen_chunks.iter().all(|c| c.chars().count() <= QWEN_MAX_CHUNK_CHARS)
+                && qwen_chunks.join(" ") == long_unpunctuated,
+            "Qwen long-sentence safeguard failed",
+        )?;
+
+        Ok(format!(
+            "device=\"{label}\" | sliced={dur:.1}s | long_chunks={}",
+            qwen_chunks.len()
+        ))
     })?;
 
     step("9. WAV & MP3 Audio Export + Sleep Inhibitor", || {
