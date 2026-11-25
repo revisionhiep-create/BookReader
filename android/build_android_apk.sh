@@ -24,6 +24,18 @@ mkdir -p "$KOTLIN_DEST"
 cp "$SCRIPT_DIR/kotlin/BookReaderPlaybackService.kt" "$KOTLIN_DEST/BookReaderPlaybackService.kt"
 cp "$SCRIPT_DIR/kotlin/MainActivity.kt" "$KOTLIN_DEST/MainActivity.kt"
 
+PROGUARD="$GEN_ANDROID/app/proguard-rules.pro"
+if ! grep -q "com.bookreader.android.MainActivity" "$PROGUARD" 2>/dev/null; then
+  cat >> "$PROGUARD" <<'EOF'
+
+# Keep BookReader JNI entry points and callbacks called from Rust
+-keep class com.bookreader.android.MainActivity { *; }
+-keep class com.bookreader.android.MainActivity$Companion { *; }
+-keep class com.bookreader.android.BookReaderPlaybackService { *; }
+-keep class com.bookreader.android.BookReaderPlaybackService$Companion { *; }
+EOF
+fi
+
 MANIFEST="$GEN_ANDROID/app/src/main/AndroidManifest.xml"
 python3 - "$MANIFEST" <<'PY'
 import sys
