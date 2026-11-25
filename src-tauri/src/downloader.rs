@@ -132,8 +132,24 @@ pub struct DownloadManager {
 
 impl DownloadManager {
     pub fn new() -> Result<Self, String> {
-        let client = reqwest::Client::builder()
+        #[allow(unused_mut)]
+        let mut builder = reqwest::Client::builder()
             .user_agent("BookReader/1.0")
+            .connect_timeout(std::time::Duration::from_secs(20));
+
+        #[cfg(target_os = "android")]
+        {
+            let roots: Vec<reqwest::Certificate> = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+                .iter()
+                .filter_map(|der| reqwest::Certificate::from_der(der.as_ref()).ok())
+                .collect();
+            if roots.is_empty() {
+                return Err("Failed to load bundled WebPKI root certificates".to_string());
+            }
+            builder = builder.tls_certs_only(roots);
+        }
+
+        let client = builder
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
         Ok(Self {

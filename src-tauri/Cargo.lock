@@ -311,6 +311,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webpki-root-certs",
  "windows-sys 0.59.0",
  "zip 9.8.1",
 ]

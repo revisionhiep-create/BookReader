@@ -52,6 +52,7 @@ reqwest = { version = "0.13", default-features = false, features = ["native-tls"
 
 [target.'cfg(target_os = "android")'.dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+webpki-root-certs = "1"
 jni = "0.21"
 
 [target.'cfg(windows)'.dependencies]
