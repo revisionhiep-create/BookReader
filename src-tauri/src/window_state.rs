@@ -1,9 +1,13 @@
 //! Desktop window placement persistence and multi-monitor recovery safeguards.
 
 use crate::models::WindowState;
+#[cfg(not(target_os = "android"))]
 use crate::storage::Storage;
+#[cfg(not(target_os = "android"))]
 use std::sync::{Arc, Condvar, Mutex};
+#[cfg(not(target_os = "android"))]
 use std::time::{Duration, Instant};
+#[cfg(not(target_os = "android"))]
 use tauri::{Monitor, PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow, WindowEvent};
 
 const DEFAULT_LOGICAL_WIDTH: f64 = 1280.0;
@@ -294,10 +298,12 @@ pub fn resolve_window_placement(
     })
 }
 
+#[cfg(not(target_os = "android"))]
 fn same_monitor(a: &Monitor, b: &Monitor) -> bool {
     a.position() == b.position() && a.size() == b.size() && a.name() == b.name()
 }
 
+#[cfg(not(target_os = "android"))]
 fn collect_monitors(window: &WebviewWindow) -> Vec<MonitorInfo> {
     let primary = window.primary_monitor().ok().flatten();
     let avail = window.available_monitors().unwrap_or_default();
@@ -321,6 +327,7 @@ fn collect_monitors(window: &WebviewWindow) -> Vec<MonitorInfo> {
         .collect()
 }
 
+#[cfg(not(target_os = "android"))]
 fn capture_live_state(window: &WebviewWindow, prev: Option<&WindowState>) -> Option<WindowState> {
     if window.is_minimized().unwrap_or(false) {
         return None;
@@ -376,6 +383,7 @@ fn capture_live_state(window: &WebviewWindow, prev: Option<&WindowState>) -> Opt
     })
 }
 
+#[cfg(not(target_os = "android"))]
 struct DebounceInner {
     latest: Option<WindowState>,
     dirty: bool,
@@ -386,7 +394,7 @@ struct DebounceInner {
 /// Restores saved window geometry with multi-monitor safeguards before showing the window,
 /// then persists move/resize/maximize updates via a debounced background writer and final
 /// `CloseRequested` flush.
-#[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg(not(target_os = "android"))]
 pub fn init_window_state(window: WebviewWindow, storage: Arc<Storage>) {
     let monitors = collect_monitors(&window);
     let saved = storage.window_state();

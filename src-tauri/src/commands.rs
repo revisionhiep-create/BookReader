@@ -18,7 +18,9 @@ use crate::text_pipeline::validate_rule_pattern;
 use crate::tts::TtsController;
 use crate::tts::qwen_engine::{decode_reference_slice, probe_audio_clip};
 use crate::voices::{list_voices_with_status, pick_downloaded_fallback_voice};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(target_os = "android"))]
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
