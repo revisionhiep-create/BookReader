@@ -8,6 +8,7 @@ export interface LibraryHandlers {
   onOpenBook: (bookId: string) => Promise<void>;
   onClose: () => void;
   onLibraryChanged: () => void;
+  onToast?: (msg: string) => void;
 }
 
 function pickBookViaInput(): Promise<File | null> {
@@ -96,27 +97,30 @@ export function renderLibraryModal(container: HTMLElement, handlers: LibraryHand
   container.querySelector("#btn-import-book")?.addEventListener("click", async () => {
     let book: BookMeta | null = null;
     try {
-      const picked = await openDialog({
-        multiple: false,
-        filters: [
-          { name: "Books", extensions: ["pdf", "epub", "docx", "txt"] },
-        ],
-      });
-      if (picked && typeof picked === "string") {
-        if (picked.startsWith("content://")) {
-          throw new Error("Android content URI fallback");
+      let picked: string | string[] | null = null;
+      try {
+        picked = await openDialog({
+          multiple: false,
+          filters: [
+            { name: "Books", extensions: ["pdf", "epub", "docx", "txt"] },
+          ],
+        });
+      } catch {
+        const file = await pickBookViaInput();
+        if (file) {
+          const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+          book = await invoke<BookMeta>("import_book_bytes", {
+            filename: file.name,
+            bytes,
+          });
         }
+      }
+      if (!book && picked && typeof picked === "string") {
         book = await invoke<BookMeta>("import_book_file", { path: picked });
       }
-    } catch {
-      const file = await pickBookViaInput();
-      if (file) {
-        const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-        book = await invoke<BookMeta>("import_book_bytes", {
-          filename: file.name,
-          bytes,
-        });
-      }
+    } catch (err) {
+      handlers.onToast?.(`Import failed: ${String(err)}`);
+      return;
     }
     if (!book) return;
     state.library = [book, ...state.library.filter((b) => b.id !== book.id)];

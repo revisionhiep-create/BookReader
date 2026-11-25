@@ -504,6 +504,14 @@ pub fn import_rules_json(
 
 #[tauri::command]
 pub fn import_book_file(state: State<'_, AppState>, path: String) -> Result<BookMeta, String> {
+    #[cfg(target_os = "android")]
+    if path.starts_with("content://") {
+        let tmp_dir = state.storage.paths().data_dir.join("import_tmp");
+        let copied = crate::media_keys::copy_android_content_uri(&path, &tmp_dir)?;
+        let res = import_book(&copied, &state.storage);
+        let _ = std::fs::remove_file(&copied);
+        return res;
+    }
     import_book(Path::new(&path), &state.storage)
 }
 

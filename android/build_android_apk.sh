@@ -15,6 +15,7 @@ if [[ ! -d "$GEN_ANDROID" ]]; then
   echo "==> Initializing Tauri Android project"
   npx tauri android init --ci --skip-targets-install --config android/tauri.android.conf.json
 fi
+npx tauri icon src-tauri/icons/icon.png --fit contain || true
 grep -n "minSdk" "$GEN_ANDROID/app/build.gradle.kts" || true
 
 echo "==> Installing BookReaderPlaybackService.kt and patching AndroidManifest.xml"

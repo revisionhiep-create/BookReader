@@ -125,11 +125,78 @@ impl MediaKeysBridge {
 mod android_jni {
     use super::ANDROID_TTS;
     use jni::JNIEnv;
-    use jni::objects::{JClass, JObject, JValue};
+    use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
     use jni::sys::jint;
+    use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
     static JVM: OnceLock<jni::JavaVM> = OnceLock::new();
+    static MAIN_ACTIVITY_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_bookreader_android_MainActivity_nativeBindApp(
+        env: JNIEnv,
+        class: JClass,
+        _activity: JObject,
+    ) {
+        if let Ok(vm) = env.get_java_vm() {
+            let _ = JVM.set(vm);
+        }
+        if let Ok(global_cls) = env.new_global_ref(class) {
+            let _ = MAIN_ACTIVITY_CLASS.set(global_cls);
+        }
+    }
+
+    pub fn copy_content_uri_to_cache(uri: &str, dest_dir: &Path) -> Result<PathBuf, String> {
+        let vm = JVM
+            .get()
+            .ok_or_else(|| "Android JVM not yet bound to MainActivity".to_string())?;
+        let cls_ref = MAIN_ACTIVITY_CLASS
+            .get()
+            .ok_or_else(|| "Android MainActivity class reference not yet bound".to_string())?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("Failed attaching JNI thread: {e}"))?;
+
+        let local_cls_obj = env
+            .new_local_ref(cls_ref.as_obj())
+            .map_err(|e| format!("Failed creating MainActivity local ref: {e}"))?;
+        let cls = JClass::from(local_cls_obj);
+
+        let dest_str = dest_dir.to_string_lossy();
+        let juri = env
+            .new_string(uri)
+            .map_err(|e| format!("Failed creating URI JNI string: {e}"))?;
+        let jdest = env
+            .new_string(dest_str.as_ref())
+            .map_err(|e| format!("Failed creating dest JNI string: {e}"))?;
+        let juri_obj = JObject::from(juri);
+        let jdest_obj = JObject::from(jdest);
+
+        let call_res = env.call_static_method(
+            cls,
+            "copyContentUriToCache",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            &[JValue::Object(&juri_obj), JValue::Object(&jdest_obj)],
+        );
+
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+            return Err("Android ContentResolver failed reading the selected file".to_string());
+        }
+
+        let val = call_res.map_err(|e| format!("JNI copyContentUriToCache failed: {e}"))?;
+        let out_obj = val
+            .l()
+            .map_err(|e| format!("Unexpected JNI return type: {e}"))?;
+        let out_jstr = JString::from(out_obj);
+        let out_path: String = env
+            .get_string(&out_jstr)
+            .map_err(|e| format!("Failed reading cached file path: {e}"))?
+            .into();
+        Ok(PathBuf::from(out_path))
+    }
 
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_bookreader_android_BookReaderPlaybackService_nativeBindJvm(
@@ -215,4 +282,9 @@ mod android_jni {
 #[cfg(target_os = "android")]
 pub fn set_android_wake_lock(hold: bool) {
     android_jni::set_wake_lock(hold);
+}
+
+#[cfg(target_os = "android")]
+pub fn copy_android_content_uri(uri: &str, dest_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    android_jni::copy_content_uri_to_cache(uri, dest_dir)
 }

@@ -294,14 +294,21 @@ function renderEmptyWelcome(): void {
   `;
 
   viewerHostEl.querySelector("#btn-empty-import")?.addEventListener("click", async () => {
-    const picked = await openDialog({
-      multiple: false,
-      filters: [{ name: "Books", extensions: ["pdf", "epub", "docx", "txt"] }],
-    });
-    if (!picked || typeof picked !== "string") return;
-    const book = await invoke<BookMeta>("import_book_file", { path: picked });
-    state.library = [book, ...state.library.filter((b) => b.id !== book.id)];
-    await openBookById(book.id);
+    try {
+      const picked = await openDialog({
+        multiple: false,
+        filters: [{ name: "Books", extensions: ["pdf", "epub", "docx", "txt"] }],
+      });
+      if (!picked || typeof picked !== "string") return;
+      setBusyLoading("Importing book...");
+      const book = await invoke<BookMeta>("import_book_file", { path: picked });
+      state.library = [book, ...state.library.filter((b) => b.id !== book.id)];
+      await openBookById(book.id);
+    } catch (err) {
+      showToast(`Import failed: ${String(err)}`);
+    } finally {
+      setBusyLoading(null);
+    }
   });
 
   viewerHostEl.querySelector("#btn-empty-library")?.addEventListener("click", () => {
@@ -500,6 +507,7 @@ function renderModal(): void {
         onLibraryChanged: () => {
           renderChrome();
         },
+        onToast: showToast,
       });
       return;
     case "pronunciation":
