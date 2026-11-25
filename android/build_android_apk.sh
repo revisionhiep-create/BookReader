@@ -21,6 +21,7 @@ echo "==> Installing BookReaderPlaybackService.kt and patching AndroidManifest.x
 KOTLIN_DEST="$GEN_ANDROID/app/src/main/java/com/bookreader/android"
 mkdir -p "$KOTLIN_DEST"
 cp "$SCRIPT_DIR/kotlin/BookReaderPlaybackService.kt" "$KOTLIN_DEST/BookReaderPlaybackService.kt"
+cp "$SCRIPT_DIR/kotlin/MainActivity.kt" "$KOTLIN_DEST/MainActivity.kt"
 
 MANIFEST="$GEN_ANDROID/app/src/main/AndroidManifest.xml"
 python3 - "$MANIFEST" <<'PY'

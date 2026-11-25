@@ -60,22 +60,37 @@ if (-not $AvdName) {
     }
 }
 
-Write-Host "Starting emulator '$AvdName' (if not already running)..."
-& $AndroidCli emulator start $AvdName
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed starting emulator '$AvdName'."
+$adbExe = Get-Command adb -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+if (-not $adbExe) { $adbExe = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe" }
+$activeEmu = $false
+if ($adbExe -and (Test-Path $adbExe)) {
+    $devOut = & $adbExe devices 2>&1 | Out-String
+    if ($devOut -match "emulator-\d+\s+device") { $activeEmu = $true }
 }
-
-Write-Host "Installing APK onto emulator..."
-& $AndroidCli install --apks $ApkPath
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed installing APK '$ApkPath'."
-}
-
-Write-Host "Launching BookReader..."
-& $AndroidCli run --apks $ApkPath --activity com.bookreader.android/.MainActivity
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installed! Open BookReader from the emulator launcher or Android Device Hub Mirror."
+if ($activeEmu) {
+    Write-Host "Emulator already running; reusing active device."
 } else {
-    Write-Host "BookReader launched! Open the Android Device Hub pane and click Mirror to interact live."
+    Write-Host "Starting emulator '$AvdName' (if not already running)..."
+    & $AndroidCli emulator start $AvdName
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed starting emulator '$AvdName'."
+    }
 }
+
+Write-Host "Installing and launching BookReader on emulator..."
+& $AndroidCli run --apks $ApkPath
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Falling back to direct install + launcher intent..."
+    & $AndroidCli install --apks $ApkPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed installing APK '$ApkPath'."
+    }
+    if ($adbExe -and (Test-Path $adbExe)) {
+        & $adbExe shell monkey -p com.bookreader.android -c android.intent.category.LAUNCHER 1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Installed APK, but failed launching com.bookreader.android launcher activity."
+        }
+    }
+}
+Write-Host "BookReader launched! Open the Android Device Hub pane and click Mirror to interact live."
+exit 0
