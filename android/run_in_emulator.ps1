@@ -80,6 +80,13 @@ if ($activeEmu) {
 Write-Host "Installing and launching BookReader on emulator..."
 & $AndroidCli run --apks $ApkPath
 if ($LASTEXITCODE -ne 0) {
+    if ($adbExe -and (Test-Path $adbExe)) {
+        Write-Host "Uninstalling existing com.bookreader.android (e.g. different CI debug key) and retrying..."
+        & $adbExe uninstall com.bookreader.android 2>&1 | Out-Null
+    }
+    & $AndroidCli run --apks $ApkPath
+}
+if ($LASTEXITCODE -ne 0) {
     Write-Host "Falling back to direct install + launcher intent..."
     & $AndroidCli install --apks $ApkPath
     if ($LASTEXITCODE -ne 0) {
