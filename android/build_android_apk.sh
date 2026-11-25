@@ -15,6 +15,7 @@ if [[ ! -d "$GEN_ANDROID" ]]; then
   echo "==> Initializing Tauri Android project"
   npx tauri android init --ci --skip-targets-install --config android/tauri.android.conf.json
 fi
+grep -n "minSdk" "$GEN_ANDROID/app/build.gradle.kts" || true
 
 echo "==> Installing BookReaderPlaybackService.kt and patching AndroidManifest.xml"
 KOTLIN_DEST="$GEN_ANDROID/app/src/main/java/com/bookreader/android"
@@ -152,14 +153,19 @@ find_and_stage() {
   local dest_name="$2"
   local found=""
   found="$(find "$APK_DIR" -type f -name "$pattern" | head -n 1 || true)"
-  if [[ -n "$found" ]]; then
-    sign_if_needed "$found" "$DIST_DIR/$dest_name"
-    echo "Staged $DIST_DIR/$dest_name"
+  if [[ -z "$found" ]]; then
+    echo "ERROR: No APK matching $pattern in $APK_DIR" >&2
+    exit 1
   fi
+  sign_if_needed "$found" "$DIST_DIR/$dest_name"
+  echo "Staged $DIST_DIR/$dest_name"
 }
 
+echo "==> Built APKs:"
+find "$APK_DIR" -type f -name "*.apk" || true
+
 if [[ "$MODE" == "split" ]]; then
-  find_and_stage "*arm64-v8a*.apk" "BookReader-android-arm64.apk"
+  find_and_stage "*arm64*.apk" "BookReader-android-arm64.apk"
   find_and_stage "*x86_64*.apk" "BookReader-android-x86_64.apk"
 elif [[ "$MODE" == "universal" ]]; then
   find_and_stage "*universal*.apk" "BookReader-android-universal.apk"
