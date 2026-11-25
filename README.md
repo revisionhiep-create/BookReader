@@ -4,7 +4,15 @@ A self-contained cross-platform (**Windows** & **macOS**) desktop text-to-speech
 
 No Python runtime, account, or cloud TTS API is required — models and voices download locally into a portable `BookReader_Data/` folder right next to `BookReader.exe` (Windows) or `BookReader.app` (macOS).
 
-**[Download Windows (`BookReader.exe`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · **[Download macOS Apple Silicon (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-arm64-portable.dmg)** · **[Download macOS Intel (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-x64-portable.dmg)** · [View Releases](https://github.com/revisionhiep-create/BookReader/releases/latest)
+**[Download Windows (`BookReader.exe`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · **[Download macOS Apple Silicon (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-arm64-portable.dmg)** · **[Download macOS Intel (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-x64-portable.dmg)** · [View Releases](https://github.com/revisionhiep-create/BookReader/releases/latest) · **[Watch Demo](https://youtu.be/GumVmqDpPY4)**
+
+---
+
+## Demo Video
+
+[![BookReader Demo Video](https://img.youtube.com/vi/GumVmqDpPY4/maxresdefault.jpg)](https://youtu.be/GumVmqDpPY4)
+
+Watch the full 2-minute walkthrough on YouTube: **https://youtu.be/GumVmqDpPY4**
 
 ---
 
