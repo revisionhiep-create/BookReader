@@ -142,10 +142,11 @@ sign_if_needed() {
   "$apksigner" sign \
     --ks "$ks" \
     --ks-pass "pass:$ks_pass" \
-    --key-alias "$key_alias" \
+    --ks-key-alias "$key_alias" \
     --key-pass "pass:$key_pass" \
     --out "$out_apk" \
     "$src_apk"
+  "$apksigner" verify "$out_apk"
 }
 
 find_and_stage() {
