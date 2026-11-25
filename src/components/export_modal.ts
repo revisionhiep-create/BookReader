@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { invoke, saveDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { formatDuration, state } from "../state";
 import type { ExportFormat, ExportScope } from "../types";
@@ -25,7 +24,7 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
 
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card" role="dialog" aria-label="Export Audio">
+      <div class="modal-card mobile-page" role="dialog" aria-label="Export Audio">
         <div class="modal-header">
           <span class="modal-title">Export Audiobook (WAV / MP3)</span>
           <button class="icon-btn" id="btn-modal-close">${Icons.close()}</button>
@@ -148,7 +147,7 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
     if (!book) return;
     const ext = draftFormat;
     const safeTitle = book.title.replace(/[\\/:*?"<>|]/g, "_");
-    const outputPath = await save({
+    const outputPath = await saveDialog({
       defaultPath: `${safeTitle}.${ext}`,
       filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
     });

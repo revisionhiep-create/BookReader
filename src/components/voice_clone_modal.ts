@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { invoke, openDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { state } from "../state";
 import type {
@@ -492,7 +491,7 @@ export function renderVoiceCloneModal(
 
   container.querySelector("#btn-pick-clone-audio")?.addEventListener("click", async () => {
     try {
-      const picked = await open({
+      const picked = await openDialog({
         multiple: false,
         filters: [
           {

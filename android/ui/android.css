@@ -1,0 +1,884 @@
+/* Hide mobile-only elements on Windows/macOS/Linux desktop */
+html:not([data-platform="android"]) .mobile-topbar-host,
+html:not([data-platform="android"]) .mobile-dock-host,
+html:not([data-platform="android"]) .mobile-drawer-backdrop,
+html:not([data-platform="android"]) .mobile-sheet-host,
+html:not([data-platform="android"]) .sheet-handle,
+html:not([data-platform="android"]) .toc-mobile-tabs {
+  display: none !important;
+}
+
+/* Android Adaptive UI (Scoped strictly to data-platform="android") */
+html[data-platform="android"] {
+  --safe-top: var(--preview-safe-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(--preview-safe-bottom, env(safe-area-inset-bottom, 0px));
+  --safe-left: var(--preview-safe-left, env(safe-area-inset-left, 0px));
+  --safe-right: var(--preview-safe-right, env(safe-area-inset-right, 0px));
+  --dock-height: 0px;
+  --cc-height: 0px;
+  --touch-min: 44px;
+}
+
+html[data-platform="android"] * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-platform="android"] input[type="range"] {
+  margin: 0;
+}
+
+html[data-platform="android"] .reader-viewport {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-x pan-y;
+}
+
+html[data-platform="android"] .modal-body,
+html[data-platform="android"] .sidebar-nav,
+html[data-platform="android"] .rules-list {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+}
+
+html[data-platform="android"][data-preview="true"] .reader-viewport,
+html[data-platform="android"][data-preview="true"] .modal-body,
+html[data-platform="android"][data-preview="true"] .sidebar-nav,
+html[data-platform="android"][data-preview="true"] .rules-list {
+  user-select: none;
+  cursor: grab;
+}
+
+html[data-platform="android"][data-preview="true"].preview-dragging,
+html[data-platform="android"][data-preview="true"].preview-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+html[data-platform="android"] .sheet-handle,
+html[data-platform="android"] .toc-mobile-tabs {
+  display: none;
+}
+
+/* ==========================================================================
+   Compact & Medium Android (< 840px wide, or Landscape Phones <= 520px tall):
+   Slim Top Bar + Slide-Over Drawer + Bottom Thumb-Zone Player Dock
+   ========================================================================== */
+@media (max-width: 839px), (max-height: 520px) {
+  html[data-platform="android"] #toolbar-host {
+    display: none;
+  }
+
+  html[data-platform="android"] .mobile-topbar-host {
+    display: block;
+    flex-shrink: 0;
+    z-index: 22;
+  }
+
+  html[data-platform="android"] .mobile-topbar {
+    padding-top: var(--safe-top);
+    padding-left: calc(6px + var(--safe-left));
+    padding-right: calc(6px + var(--safe-right));
+    min-height: calc(48px + var(--safe-top));
+    background: var(--bg-toolbar);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    user-select: none;
+  }
+
+  html[data-platform="android"] .mobile-topbar .icon-btn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    border-radius: 10px;
+  }
+
+  html[data-platform="android"] .mobile-book-title-btn {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    padding: 0 8px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    text-align: left;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  html[data-platform="android"] .mobile-book-title-btn:active {
+    background: var(--bg-hover);
+  }
+
+  html[data-platform="android"] .mobile-book-title-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    width: 100%;
+  }
+
+  /* Slide-Over Navigation Drawer */
+  html[data-platform="android"] .sidebar,
+  html[data-platform="android"] .sidebar.collapsed {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(82vw, 290px);
+    min-width: 0;
+    z-index: 55;
+    opacity: 1;
+    overflow: hidden;
+    border-right: 1px solid var(--border-strong);
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    transform: translateX(-105%);
+    transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+
+  html[data-platform="android"] .sidebar.drawer-open {
+    transform: translateX(0);
+  }
+
+  html[data-platform="android"] .mobile-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.54);
+    z-index: 52;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+
+  html[data-platform="android"] .mobile-drawer-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  html[data-platform="android"] .sidebar .nav-btn {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  html[data-platform="android"] .sidebar-header .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Loading Banner */
+  html[data-platform="android"] .loading-banner {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+
+  /* Viewport Bottom Clearance above CC + Player Dock */
+  html[data-platform="android"] .reader-viewport {
+    padding-bottom: calc(var(--dock-height, 0px) + var(--cc-height, 0px) + var(--safe-bottom) + 64px);
+    padding-left: calc(12px + var(--safe-left));
+    padding-right: calc(12px + var(--safe-right));
+  }
+
+  /* Floating Search Bar under Slim Topbar */
+  html[data-platform="android"] .search-bar {
+    top: calc(var(--safe-top) + 54px);
+    left: calc(10px + var(--safe-left));
+    right: calc(10px + var(--safe-right));
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  html[data-platform="android"] .search-bar input {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    min-height: 38px;
+    font-size: 14px;
+  }
+
+  html[data-platform="android"] .search-bar .icon-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  /* Closed Captions Bar docked cleanly above Player Dock */
+  html[data-platform="android"] .cc-bar {
+    left: var(--safe-left);
+    right: var(--safe-right);
+    bottom: calc(var(--dock-height, 0px) + var(--safe-bottom));
+    min-height: 54px;
+    max-height: 114px;
+    padding: 10px 42px 10px 14px;
+    z-index: 27;
+  }
+
+  html[data-platform="android"] .cc-text {
+    max-width: 100%;
+    font-size: clamp(15px, var(--mobile-cc-size, 19px), 26px) !important;
+    line-height: 1.4;
+  }
+
+  html[data-platform="android"] .cc-close {
+    width: 34px;
+    height: 34px;
+    top: 6px;
+    right: 6px;
+  }
+
+  /* Bottom Thumb-Zone Player Dock */
+  html[data-platform="android"] .mobile-dock-host {
+    display: block;
+  }
+
+  html[data-platform="android"] .mobile-player-dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 29;
+    background: var(--bg-toolbar);
+    border-top: 1px solid var(--border-strong);
+    padding: 4px calc(10px + var(--safe-right)) calc(8px + var(--safe-bottom)) calc(10px + var(--safe-left));
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.24);
+    user-select: none;
+  }
+
+  html[data-platform="android"] .mobile-scrub-hit {
+    height: 22px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    touch-action: none;
+  }
+
+  html[data-platform="android"] .mobile-time-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    margin-top: -2px;
+  }
+
+  html[data-platform="android"] .mobile-dock-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    min-height: 48px;
+  }
+
+  html[data-platform="android"] .mobile-voice-pill {
+    flex: 1;
+    min-width: 0;
+    max-width: 126px;
+    height: 38px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-primary);
+  }
+
+  html[data-platform="android"] .mobile-voice-pill span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  html[data-platform="android"] .mobile-transport {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  html[data-platform="android"] .mobile-transport .icon-btn {
+    width: 42px;
+    height: 42px;
+    border-radius: 999px;
+  }
+
+  html[data-platform="android"] .mobile-transport .play-btn {
+    width: 46px;
+    height: 46px;
+  }
+
+  html[data-platform="android"] .mobile-dock-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  html[data-platform="android"] .mobile-dock-right .speed-pill {
+    height: 38px;
+    padding: 0 8px;
+    font-size: 12.5px;
+  }
+
+  html[data-platform="android"] .mobile-dock-right .icon-btn {
+    width: 36px;
+    height: 42px;
+  }
+
+  /* Collapsed Floating Mini Pill */
+  html[data-platform="android"] .mobile-dock-pill {
+    position: fixed;
+    right: calc(14px + var(--safe-right));
+    bottom: calc(var(--cc-height, 0px) + var(--safe-bottom) + 12px);
+    z-index: 29;
+    height: 46px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-card);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    user-select: none;
+  }
+
+  html[data-platform="android"] .mobile-dock-pill .play-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  html[data-platform="android"] .mobile-dock-pill .icon-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+  }
+
+  /* Quick Reader / Speed / Sleep Bottom Sheet Host */
+  html[data-platform="android"] .mobile-sheet-host {
+    position: relative;
+    z-index: 62;
+  }
+
+  /* Toast positioned cleanly above bottom chrome */
+  html[data-platform="android"] .toast {
+    left: 14px;
+    right: 14px;
+    bottom: calc(var(--dock-height, 0px) + var(--cc-height, 0px) + var(--safe-bottom) + 14px);
+    text-align: center;
+  }
+
+  /* PDF Adjustments for Touch Screens */
+  html[data-platform="android"] .pdf-page-badge {
+    right: 8px;
+    top: 8px;
+    z-index: 6;
+  }
+
+  html[data-platform="android"] .ignore-handle {
+    height: 36px;
+  }
+
+  html[data-platform="android"] .ignore-curtain.top .ignore-handle {
+    bottom: -18px;
+  }
+
+  html[data-platform="android"] .ignore-curtain.bottom .ignore-handle {
+    top: -18px;
+  }
+
+  /* Quick Reader Sheet Internal Layout */
+  html[data-platform="android"] .qr-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+  }
+
+  html[data-platform="android"] .qr-seg-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  html[data-platform="android"] .qr-two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  html[data-platform="android"] .qr-pill-btn {
+    min-height: 44px;
+    padding: 8px 12px;
+    border-radius: 9px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+  }
+
+  html[data-platform="android"] .qr-pill-btn.active {
+    background: var(--bg-active-pill);
+    border-color: var(--accent-muted);
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  html[data-platform="android"] .qr-stepper {
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 9px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+    overflow: hidden;
+  }
+
+  html[data-platform="android"] .qr-stepper button {
+    height: 100%;
+    min-width: 40px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  html[data-platform="android"] .qr-stepper .qr-step-val {
+    border-left: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--border-subtle);
+    min-width: 56px;
+    font-variant-numeric: tabular-nums;
+    font-size: 12.5px;
+  }
+}
+
+/* ==========================================================================
+   Compact Phones (< 600px): Edge-to-Edge Prose, Hybrid Sheets & Full Pages
+   ========================================================================== */
+@media (max-width: 599px) {
+  html[data-platform="android"] .reader-viewport {
+    padding: 8px var(--safe-right) calc(var(--dock-height, 0px) + var(--cc-height, 0px) + var(--safe-bottom) + 64px) var(--safe-left);
+  }
+
+  html[data-platform="android"] .br-prose {
+    max-width: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--bg-app);
+    padding: 12px 18px 28px;
+  }
+
+  html[data-platform="android"] .sheet-handle {
+    display: block;
+    width: 38px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--border-strong);
+    margin: 9px auto 2px;
+    flex-shrink: 0;
+  }
+
+  /* Hybrid Bottom Sheets (Voice Picker, Quick Reader, Speed, Sleep) */
+  html[data-platform="android"] .modal-backdrop:has(.mobile-sheet) {
+    align-items: flex-end;
+    justify-content: stretch;
+    padding: 0;
+  }
+
+  html[data-platform="android"] .modal-card.mobile-sheet {
+    width: 100%;
+    max-width: 100%;
+    max-height: 88dvh;
+    border-radius: 18px 18px 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    padding-bottom: var(--safe-bottom);
+  }
+
+  /* Hybrid Full-Screen Pages (Settings, Library, Rules, TOC, Export, Setup) */
+  html[data-platform="android"] .modal-backdrop:has(.mobile-page) {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
+  }
+
+  html[data-platform="android"] .modal-card.mobile-page {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    border: none;
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+  }
+
+  html[data-platform="android"] .modal-header {
+    padding: 10px 14px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  html[data-platform="android"] .modal-header .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  html[data-platform="android"] .modal-body {
+    padding: 14px;
+  }
+
+  html[data-platform="android"] .btn-primary,
+  html[data-platform="android"] .btn-secondary {
+    min-height: 42px;
+    padding: 9px 14px;
+  }
+
+  /* Stacked Settings Sliders & Selects */
+  html[data-platform="android"] .setting-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  html[data-platform="android"] .setting-row input[type="range"] {
+    width: 100%;
+    height: 34px;
+  }
+
+  html[data-platform="android"] .setting-row select {
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+
+  html[data-platform="android"] .setting-group > div:first-child {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  html[data-platform="android"] .checkbox-label {
+    min-height: 36px;
+    gap: 10px;
+    line-height: 1.4;
+  }
+
+  html[data-platform="android"] .checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+
+  html[data-platform="android"] .storage-summary-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  html[data-platform="android"] .storage-summary-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-radius: 7px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    font-size: 12.5px;
+  }
+
+  /* Voice Picker: 1-Column Cards & Scrollable Filter Chips */
+  html[data-platform="android"] .voice-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  html[data-platform="android"] .voice-card {
+    padding: 12px;
+  }
+
+  html[data-platform="android"] .voice-card .icon-btn {
+    width: 38px !important;
+    height: 38px !important;
+  }
+
+  html[data-platform="android"] .chip-row {
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  html[data-platform="android"] .modal-card.mobile-sheet .chip-row {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    min-height: auto;
+    align-items: center;
+    padding-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  html[data-platform="android"] .chip {
+    min-height: 36px;
+    padding: 6px 11px;
+    font-size: 12.5px;
+    flex-shrink: 0;
+  }
+
+  /* Chapters & Bookmarks Segmented Tabs on Compact Phones */
+  html[data-platform="android"] .toc-mobile-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-toolbar);
+    flex-shrink: 0;
+  }
+
+  html[data-platform="android"] .toc-tab-btn {
+    min-height: 38px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+  }
+
+  html[data-platform="android"] .toc-tab-btn.active {
+    background: var(--bg-active-pill);
+    border-color: var(--accent-muted);
+    color: var(--text-primary);
+  }
+
+  html[data-platform="android"] .toc-modal-card[data-toc-tab="chapters"] .toc-section-bookmarks {
+    display: none;
+  }
+
+  html[data-platform="android"] .toc-modal-card[data-toc-tab="bookmarks"] .toc-section-chapters {
+    display: none;
+  }
+
+  /* Rules & Library Mobile Forms */
+  html[data-platform="android"] .rule-input-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  html[data-platform="android"] .rule-input-row input,
+  html[data-platform="android"] .replace-wrap input {
+    min-height: 42px;
+    font-size: 14px;
+  }
+
+  html[data-platform="android"] .rule-row {
+    grid-template-columns: 1fr auto;
+    gap: 6px 10px;
+  }
+
+  html[data-platform="android"] .book-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  html[data-platform="android"] .book-row .icon-btn {
+    width: 42px;
+    height: 42px;
+  }
+}
+
+/* ==========================================================================
+   Medium Tier (600px - 839px, or Landscape Phones <= 520px tall)
+   ========================================================================== */
+@media (min-width: 600px) and (max-width: 839px), (min-width: 600px) and (max-height: 520px) {
+  html[data-platform="android"] .br-prose {
+    max-width: 640px;
+    padding: 26px 32px;
+    border-radius: 10px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-page-card);
+  }
+
+  html[data-platform="android"] .voice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  html[data-platform="android"] .modal-backdrop:has(.mobile-sheet) {
+    align-items: flex-end;
+    padding: 0 24px;
+  }
+
+  html[data-platform="android"] .modal-card.mobile-sheet {
+    max-width: 620px;
+    max-height: 86dvh;
+    border-radius: 18px 18px 0 0;
+    border-bottom: none;
+    padding-bottom: var(--safe-bottom);
+  }
+
+  html[data-platform="android"] .modal-card.mobile-sheet .chip-row {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    flex-shrink: 0;
+    min-height: auto;
+    align-items: center;
+  }
+
+  html[data-platform="android"] .sheet-handle {
+    display: block;
+    width: 38px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--border-strong);
+    margin: 9px auto 2px;
+    flex-shrink: 0;
+  }
+
+  html[data-platform="android"] .storage-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  html[data-platform="android"] .storage-summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    font-size: 12px;
+  }
+}
+
+/* ==========================================================================
+   Short-Height Landscape (<= 520px tall): Keep Maximum Reading Area
+   ========================================================================== */
+@media (max-height: 520px) {
+  html[data-platform="android"] .mobile-topbar {
+    min-height: calc(40px + var(--safe-top));
+    height: calc(40px + var(--safe-top));
+  }
+
+  html[data-platform="android"] .mobile-topbar .icon-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  html[data-platform="android"] .cc-bar {
+    min-height: 40px;
+    max-height: 54px;
+    padding: 6px 38px 6px 12px;
+  }
+
+  html[data-platform="android"] .mobile-player-dock {
+    padding-top: 2px;
+    padding-bottom: calc(4px + var(--safe-bottom));
+    gap: 1px;
+  }
+
+  html[data-platform="android"] .mobile-scrub-hit {
+    height: 16px;
+  }
+
+  html[data-platform="android"] .mobile-time-row {
+    display: none;
+  }
+
+  html[data-platform="android"] .mobile-dock-controls {
+    min-height: 40px;
+  }
+
+  html[data-platform="android"] .mobile-transport .play-btn {
+    width: 38px;
+    height: 38px;
+  }
+}
+
+/* ==========================================================================
+   Expanded Tier (>= 840px wide AND > 520px tall): Large Android Tablets
+   ========================================================================== */
+@media (min-width: 840px) and (min-height: 521px) {
+  html[data-platform="android"] .mobile-topbar-host,
+  html[data-platform="android"] .mobile-dock-host,
+  html[data-platform="android"] .mobile-drawer-backdrop,
+  html[data-platform="android"] .mobile-sheet-host {
+    display: none !important;
+  }
+
+  html[data-platform="android"] .sidebar {
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+  }
+
+  html[data-platform="android"] .topbar {
+    padding: calc(6px + var(--safe-top)) 10px 6px;
+    height: auto;
+    min-height: calc(48px + var(--safe-top));
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  html[data-platform="android"] .toolbar-group {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  html[data-platform="android"] .topbar .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  html[data-platform="android"] .reader-viewport {
+    padding-bottom: 28px;
+  }
+
+  html[data-platform="android"] .cc-bar {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    flex-shrink: 0;
+    padding: 12px 48px calc(12px + var(--safe-bottom));
+  }
+
+  html[data-platform="android"] .storage-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  html[data-platform="android"] .storage-summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    font-size: 12px;
+  }
+}

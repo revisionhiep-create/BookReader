@@ -1,19 +1,32 @@
-//! Native Rust Qwen3-TTS Base voice-cloning engine built on `qwen_tts` + `candle-core`.
+//! Native Rust Qwen3-TTS Base voice-cloning engine built on `qwen_tts` + `candle-core`
+//! (compiled when the `voice-cloning` feature is enabled; lightweight stub otherwise).
 
 use crate::models::{AudioClipProbe, CloneVoiceRequest, ClonedVoiceMeta, QwenModelVariant};
 use crate::paths::AppPaths;
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use crate::storage::now_unix_secs;
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use candle_core::{DType, Device, Tensor};
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use hound::{SampleFormat, WavSpec, WavWriter};
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use qwen_tts::audio::utils::{AudioInput, load_audio};
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use qwen_tts::io::voice_prompt::{load_voice_prompt, save_voice_prompt};
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use qwen_tts::model::Model;
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use qwen_tts::model::loader::{LoaderConfig, ModelLoader};
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use qwen_tts::model::options::VoiceCloneOptions;
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use qwen_tts::model::voice_clone::VoiceClonePromptItem;
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use std::sync::{Mutex, OnceLock, RwLock};
 
 pub const QWEN_SAMPLE_RATE: u32 = 24_000;
@@ -25,10 +38,12 @@ const QWEN_INTER_CHUNK_SILENCE_MS: usize = 70;
 const REF_TRAILING_SILENCE_MS: usize = 120;
 const REF_EDGE_FADE_MS: usize = 10;
 
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 static CUDA_AVAILABLE: OnceLock<bool> = OnceLock::new();
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 static METAL_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
-#[cfg(all(target_os = "windows", feature = "qwen-cuda"))]
+#[cfg(all(feature = "voice-cloning", not(target_os = "android"), target_os = "windows", feature = "qwen-cuda"))]
 fn cuda_dlls_present() -> bool {
     let runtime_dlls = option_env!("BOOKREADER_CUDA_DLLS")
         .unwrap_or("cublas64_13.dll,cublasLt64_13.dll,curand64_10.dll,nvrtc64_130_0.dll");
@@ -54,6 +69,7 @@ fn cuda_dlls_present() -> bool {
     true
 }
 
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 fn cuda_available() -> bool {
     *CUDA_AVAILABLE.get_or_init(|| {
         #[cfg(feature = "qwen-cuda")]
@@ -74,6 +90,7 @@ fn cuda_available() -> bool {
     })
 }
 
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 fn metal_available() -> bool {
     *METAL_AVAILABLE.get_or_init(|| {
         #[cfg(feature = "qwen-metal")]
@@ -87,6 +104,7 @@ fn metal_available() -> bool {
     })
 }
 
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 fn cpu_device_label() -> &'static str {
     if cfg!(feature = "qwen-accelerate") {
         "CPU + Apple Accelerate (F32)"
@@ -95,6 +113,7 @@ fn cpu_device_label() -> &'static str {
     }
 }
 
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 struct LoadedQwen {
     variant: QwenModelVariant,
     model: Model,
@@ -105,6 +124,7 @@ struct LoadedQwen {
 }
 
 /// Thread-safe lazy wrapper around the Qwen3-TTS Base voice-cloning model.
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 pub struct QwenCloneEngine {
     inner: Mutex<Option<LoadedQwen>>,
     loaded: AtomicBool,
@@ -113,6 +133,7 @@ pub struct QwenCloneEngine {
     pending_evictions: Mutex<HashSet<String>>,
 }
 
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 impl QwenCloneEngine {
     pub fn new() -> Self {
         Self {
@@ -514,6 +535,7 @@ impl QwenCloneEngine {
 }
 
 /// Decodes, trims, normalizes, and fades a reference audio slice to 24 kHz mono PCM.
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 pub fn decode_reference_slice(
     path: &Path,
     start_sec: Option<f32>,
@@ -529,6 +551,7 @@ pub fn decode_reference_slice(
 }
 
 /// Decodes an audio file and computes recommended clip bounds.
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 pub fn probe_audio_clip(path: &Path) -> Result<AudioClipProbe, String> {
     if !path.is_file() {
         return Err(format!("Audio file not found: {}", path.display()));
@@ -555,6 +578,78 @@ pub fn probe_audio_clip(path: &Path) -> Result<AudioClipProbe, String> {
         status: status.to_string(),
         message,
     })
+}
+
+/// Lightweight stub when `voice-cloning` feature is disabled (e.g. Android).
+#[cfg(not(all(feature = "voice-cloning", not(target_os = "android"))))]
+pub struct QwenCloneEngine;
+
+#[cfg(not(all(feature = "voice-cloning", not(target_os = "android"))))]
+#[allow(dead_code)]
+impl QwenCloneEngine {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        false
+    }
+
+    pub fn loaded_variant(&self) -> Option<QwenModelVariant> {
+        None
+    }
+
+    pub fn is_variant_loaded(&self, _variant: QwenModelVariant) -> bool {
+        false
+    }
+
+    pub fn detect_device_label() -> String {
+        "Disabled".to_string()
+    }
+
+    pub fn device_label(&self) -> String {
+        "Disabled".to_string()
+    }
+
+    pub fn ensure_loaded(&self, _paths: &AppPaths, _variant: QwenModelVariant) -> Result<(), String> {
+        Err("Voice cloning is disabled on this platform".to_string())
+    }
+
+    pub fn clone_voice(
+        &self,
+        _paths: &AppPaths,
+        _variant: QwenModelVariant,
+        _req: &CloneVoiceRequest,
+    ) -> Result<ClonedVoiceMeta, String> {
+        Err("Voice cloning is disabled on this platform".to_string())
+    }
+
+    pub fn synthesize(
+        &self,
+        _paths: &AppPaths,
+        _variant: QwenModelVariant,
+        _text: &str,
+        _voice_id: &str,
+        _voice_meta: Option<&ClonedVoiceMeta>,
+    ) -> Result<Vec<f32>, String> {
+        Err("Voice cloning is disabled on this platform".to_string())
+    }
+
+    pub fn evict_cached_voice(&self, _voice_id: &str) {}
+}
+
+#[cfg(not(all(feature = "voice-cloning", not(target_os = "android"))))]
+pub fn decode_reference_slice(
+    _path: &Path,
+    _start_sec: Option<f32>,
+    _end_sec: Option<f32>,
+) -> Result<(Vec<f32>, f32), String> {
+    Err("Voice cloning is disabled on this platform".to_string())
+}
+
+#[cfg(not(all(feature = "voice-cloning", not(target_os = "android"))))]
+pub fn probe_audio_clip(_path: &Path) -> Result<AudioClipProbe, String> {
+    Err("Voice cloning is disabled on this platform".to_string())
 }
 
 /// Classifies clip duration relative to Qwen3-TTS's 5–15s sweet spot (3s min, 30s max).
@@ -669,6 +764,7 @@ pub fn slice_and_normalize_reference(
     Ok((out, actual_dur))
 }
 
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 fn write_mono_wav_f32(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -695,6 +791,7 @@ fn write_mono_wav_f32(path: &Path, samples: &[f32], sample_rate: u32) -> Result<
 
 /// Splits oversized text into safe Qwen3-TTS chunks (`<= QWEN_MAX_CHUNK_CHARS`), leaving
 /// normal-length inputs untouched.
+#[cfg_attr(not(all(feature = "voice-cloning", not(target_os = "android"))), allow(dead_code))]
 pub fn chunk_text_for_qwen(text: &str) -> Vec<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -711,6 +808,7 @@ pub fn chunk_text_for_qwen(text: &str) -> Vec<String> {
 
 /// Stitches synthesized Qwen3-TTS chunks cleanly with brief inter-chunk silence, leaving
 /// single-chunk outputs untouched.
+#[cfg_attr(not(all(feature = "voice-cloning", not(target_os = "android"))), allow(dead_code))]
 pub fn stitch_qwen_chunks(mut chunks: Vec<Vec<f32>>, sample_rate: u32) -> Vec<f32> {
     if chunks.is_empty() {
         return Vec::new();
@@ -734,6 +832,7 @@ pub fn stitch_qwen_chunks(mut chunks: Vec<Vec<f32>>, sample_rate: u32) -> Vec<f3
     out
 }
 
+#[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 fn resample_linear(input: &[f32], from_sr: u32, to_sr: u32) -> Vec<f32> {
     if input.is_empty() || from_sr == 0 || from_sr == to_sr {
         return input.to_vec();
@@ -805,6 +904,7 @@ mod tests {
         assert_eq!((start, end), (0.0, 15.0));
     }
 
+    #[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
     #[test]
     fn metadata_and_eviction_do_not_block_while_engine_mutex_is_held() {
         let engine = QwenCloneEngine::new();

@@ -560,6 +560,7 @@ pub struct AppBootstrap {
     pub data_dir: String,
     pub media_base_url: String,
     pub platform: String,
+    pub voice_cloning_enabled: bool,
     pub settings: Settings,
     pub library: Vec<BookMeta>,
     pub pronunciations: Vec<PronunciationRule>,

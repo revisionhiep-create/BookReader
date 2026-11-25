@@ -200,7 +200,8 @@ export interface AppBootstrap {
   appdata_dir: string;
   data_dir: string;
   media_base_url: string;
-  platform: "windows" | "macos" | "linux";
+  platform: "windows" | "macos" | "linux" | "android";
+  voice_cloning_enabled?: boolean;
   settings: Settings;
   library: BookMeta[];
   pronunciations: PronunciationRule[];

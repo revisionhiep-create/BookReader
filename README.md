@@ -22,6 +22,7 @@ Platform-specific configs, build/test scripts, docs, and binaries are separated 
 
 - **`windows/`** — Windows build script (`windows/build.ps1`), Tauri overlay config, standalone `windows/BookReader.exe`, and [Windows Quick Start (`windows/README.md`)](windows/README.md)
 - **`macos/`** — macOS portable `.dmg` packager (`macos/build_portable_dmg.sh`), macOS feature verification suite (`macos/test_macos_features.sh`), Tauri overlay config, and [macOS Quick Start (`macos/README.md`)](macos/README.md)
+- **`android/`** — Adaptive Android UI (`android/ui/`), multi-device browser preview lab (`npm run preview:android`), Kotlin `MediaSession` service, emulator launcher (`android/run_in_emulator.ps1`), APK build script, and [Android Guide (`android/README.md`)](android/README.md)
 
 ---
 

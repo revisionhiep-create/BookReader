@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../tauri_bridge";
 import { Icons } from "../icons";
-import { state } from "../state";
+import { isVoiceCloningEnabled, state } from "../state";
 import type { DeleteClonedVoiceResponse, Settings, VoiceInfo } from "../types";
 import { escapeAttr, escapeHtml } from "./sidebar";
 
@@ -24,9 +24,17 @@ export function renderVoicePickerModal(
   container: HTMLElement,
   handlers: VoicePickerHandlers,
 ): void {
-  const clonedVoices = state.voices.filter((v) => v.is_cloned);
+  const cloningEnabled = isVoiceCloningEnabled();
+  const visibleVoices = cloningEnabled
+    ? state.voices
+    : state.voices.filter((v) => !v.is_cloned);
+  if (!cloningEnabled && activeFilter === "cloned") {
+    activeFilter = "all";
+  }
+
+  const clonedVoices = cloningEnabled ? visibleVoices.filter((v) => v.is_cloned) : [];
   const groups = [
-    { key: "cloned", label: "Cloned Voices (Qwen3-TTS)" },
+    ...(cloningEnabled ? [{ key: "cloned", label: "Cloned Voices (Qwen3-TTS)" }] : []),
     { key: "en-us", label: "English (US) — Female & Male" },
     { key: "en-gb", label: "English (UK) — Female & Male" },
     { key: "characters", label: "English Character Voices" },
@@ -37,13 +45,17 @@ export function renderVoicePickerModal(
     return activeFilter === g.key;
   });
 
-  const missingCount = state.voices.filter((v) => !v.is_cloned && !v.downloaded).length;
+  const missingCount = visibleVoices.filter((v) => !v.is_cloned && !v.downloaded).length;
+  const modalTitle = cloningEnabled
+    ? `Phonon 31M &amp; Cloned Voices (${visibleVoices.length})`
+    : `Phonon 31M Voices (${visibleVoices.length})`;
 
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card wide" role="dialog" aria-label="Voices">
+      <div class="modal-card wide mobile-sheet" role="dialog" aria-label="Voices">
+        <div class="sheet-handle" aria-hidden="true"></div>
         <div class="modal-header">
-          <span class="modal-title">Phonon 31M &amp; Cloned Voices (${state.voices.length})</span>
+          <span class="modal-title">${modalTitle}</span>
           <div style="display:flex;align-items:center;gap:8px;">
             ${
               missingCount > 0
@@ -56,8 +68,12 @@ export function renderVoicePickerModal(
 
         <div class="modal-body">
           <div class="chip-row" style="margin-top:0;">
-            <button class="chip ${activeFilter === "all" ? "active" : ""}" data-vfilter="all">All (${state.voices.length})</button>
-            <button class="chip ${activeFilter === "cloned" ? "active" : ""}" data-vfilter="cloned">Cloned (${clonedVoices.length})</button>
+            <button class="chip ${activeFilter === "all" ? "active" : ""}" data-vfilter="all">All (${visibleVoices.length})</button>
+            ${
+              cloningEnabled
+                ? `<button class="chip ${activeFilter === "cloned" ? "active" : ""}" data-vfilter="cloned">Cloned (${clonedVoices.length})</button>`
+                : ""
+            }
             <button class="chip ${activeFilter === "en-us" ? "active" : ""}" data-vfilter="en-us">US English (12)</button>
             <button class="chip ${activeFilter === "en-gb" ? "active" : ""}" data-vfilter="en-gb">UK English (13)</button>
             <button class="chip ${activeFilter === "characters" ? "active" : ""}" data-vfilter="characters">Characters (12)</button>
@@ -65,7 +81,7 @@ export function renderVoicePickerModal(
 
           ${groups
             .map((g) => {
-              const items = state.voices.filter((v) => v.locale === g.key);
+              const items = visibleVoices.filter((v) => v.locale === g.key);
               if (g.key === "cloned" && items.length === 0) {
                 return `
                   <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-top:6px;">${g.label}</div>

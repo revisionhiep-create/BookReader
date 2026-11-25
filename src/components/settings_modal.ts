@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../tauri_bridge";
 import { Icons } from "../icons";
-import { persistSettings, state } from "../state";
+import { isAndroidPlatform, persistSettings, state } from "../state";
 import type { BracketMode } from "../types";
 import { escapeHtml } from "./sidebar";
 
@@ -17,14 +17,17 @@ export function renderSettingsModal(
   const p = s.pauses;
   const san = s.sanitizer;
   const typ = s.typography;
+  const isAndroid = isAndroidPlatform();
   const isMac =
     state.bootstrap?.platform === "macos" || /Mac/i.test(navigator.platform);
   const settingsDirLabel = isMac ? "Settings Folder" : "AppData Settings";
   const openSettingsBtnLabel = isMac ? "Open Settings Folder" : "Open AppData Folder";
+  const phononVoices = state.voices.filter((v) => !v.is_cloned);
+  const cachedPhononCount = phononVoices.filter((v) => v.downloaded).length;
 
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card wide" role="dialog" aria-label="Settings">
+      <div class="modal-card wide mobile-page" role="dialog" aria-label="Settings">
         <div class="modal-header">
           <span class="modal-title">Settings (Auto-Saved)</span>
           <button class="icon-btn" id="btn-modal-close">${Icons.close()}</button>
@@ -106,10 +109,35 @@ export function renderSettingsModal(
             </div>
             <div class="setting-row">
               <span>Caption Font Size (CC Bar) — <strong>${typ.cc_font_size} px</strong></span>
-              <input type="range" id="set-cc-font-size" min="14" max="48" step="2" value="${typ.cc_font_size}"/>
+              <input type="range" id="set-cc-font-size" min="14" max="48" step="1" value="${typ.cc_font_size}"/>
             </div>
           </div>
 
+          ${
+            isAndroid
+              ? `
+          <div class="setting-group">
+            <strong>Storage &amp; Cache</strong>
+            <div class="storage-summary-grid">
+              <div class="storage-summary-item">
+                <span>Phonon 31M Engine</span>
+                <strong>${state.bootstrap?.model_ready ? "Ready (~65 MB)" : "Not Downloaded"}</strong>
+              </div>
+              <div class="storage-summary-item">
+                <span>Cached Voices</span>
+                <strong>${cachedPhononCount} / ${phononVoices.length}</strong>
+              </div>
+              <div class="storage-summary-item">
+                <span>Library Books</span>
+                <strong>${state.library.length} book${state.library.length === 1 ? "" : "s"}</strong>
+              </div>
+            </div>
+            <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;">
+              Models, voices, books, and settings are stored privately inside Android app storage.
+            </div>
+          </div>
+          `
+              : `
           <div class="setting-group">
             <strong>Storage Folders</strong>
             <div style="font-size:12px;color:var(--text-secondary);word-break:break-all;">
@@ -121,6 +149,8 @@ export function renderSettingsModal(
               <button class="btn-secondary" id="btn-open-portable">Open BookReader_Data Folder</button>
             </div>
           </div>
+          `
+          }
         </div>
       </div>
     </div>
@@ -145,37 +175,65 @@ export function renderSettingsModal(
     });
   });
 
-  const bindRange = (id: string, onChange: (val: number) => void) => {
-    container.querySelector<HTMLInputElement>(id)?.addEventListener("change", (e) => {
-      onChange(parseFloat((e.target as HTMLInputElement).value));
+  const bindRange = (id: string, onChange: (val: number) => void, fmt?: (val: number) => string) => {
+    const input = container.querySelector<HTMLInputElement>(id);
+    if (!input) return;
+    if (fmt) {
+      input.addEventListener("input", () => {
+        const strong = input.closest(".setting-row")?.querySelector("strong");
+        if (strong) strong.textContent = fmt(parseFloat(input.value));
+      });
+    }
+    input.addEventListener("change", () => {
+      onChange(parseFloat(input.value));
     });
   };
 
-  bindRange("#set-sent-ms", (v) => {
-    void persistSettings({ pauses: { ...state.settings.pauses, sentence_ms: v, preset: "custom" } }).then(() =>
-      renderSettingsModal(container, handlers),
-    );
-  });
-  bindRange("#set-para-ms", (v) => {
-    void persistSettings({ pauses: { ...state.settings.pauses, paragraph_ms: v, preset: "custom" } }).then(() =>
-      renderSettingsModal(container, handlers),
-    );
-  });
-  bindRange("#set-sec-ms", (v) => {
-    void persistSettings({ pauses: { ...state.settings.pauses, section_ms: v, preset: "custom" } }).then(() =>
-      renderSettingsModal(container, handlers),
-    );
-  });
-  bindRange("#set-comma-ms", (v) => {
-    void persistSettings({ pauses: { ...state.settings.pauses, comma_extra_ms: v, preset: "custom" } }).then(() =>
-      renderSettingsModal(container, handlers),
-    );
-  });
-  bindRange("#set-semi-ms", (v) => {
-    void persistSettings({ pauses: { ...state.settings.pauses, semicolon_extra_ms: v, preset: "custom" } }).then(() =>
-      renderSettingsModal(container, handlers),
-    );
-  });
+  bindRange(
+    "#set-sent-ms",
+    (v) => {
+      void persistSettings({ pauses: { ...state.settings.pauses, sentence_ms: v, preset: "custom" } }).then(() =>
+        renderSettingsModal(container, handlers),
+      );
+    },
+    (v) => `${Math.round(v)} ms`,
+  );
+  bindRange(
+    "#set-para-ms",
+    (v) => {
+      void persistSettings({ pauses: { ...state.settings.pauses, paragraph_ms: v, preset: "custom" } }).then(() =>
+        renderSettingsModal(container, handlers),
+      );
+    },
+    (v) => `${Math.round(v)} ms`,
+  );
+  bindRange(
+    "#set-sec-ms",
+    (v) => {
+      void persistSettings({ pauses: { ...state.settings.pauses, section_ms: v, preset: "custom" } }).then(() =>
+        renderSettingsModal(container, handlers),
+      );
+    },
+    (v) => `${Math.round(v)} ms`,
+  );
+  bindRange(
+    "#set-comma-ms",
+    (v) => {
+      void persistSettings({ pauses: { ...state.settings.pauses, comma_extra_ms: v, preset: "custom" } }).then(() =>
+        renderSettingsModal(container, handlers),
+      );
+    },
+    (v) => `${Math.round(v)} ms`,
+  );
+  bindRange(
+    "#set-semi-ms",
+    (v) => {
+      void persistSettings({ pauses: { ...state.settings.pauses, semicolon_extra_ms: v, preset: "custom" } }).then(() =>
+        renderSettingsModal(container, handlers),
+      );
+    },
+    (v) => `${Math.round(v)} ms`,
+  );
 
   container.querySelector<HTMLInputElement>("#set-adaptive-pause")?.addEventListener("change", (e) => {
     void persistSettings({
@@ -204,29 +262,41 @@ export function renderSettingsModal(
     });
   });
 
-  bindRange("#set-font-size", (v) => {
-    void persistSettings({
-      typography: { ...state.settings.typography, font_size: Math.round(v) },
-    }).then(() => {
-      handlers.onTypographyChanged();
-      renderSettingsModal(container, handlers);
-    });
-  });
-  bindRange("#set-line-height", (v) => {
-    void persistSettings({
-      typography: { ...state.settings.typography, line_height: v },
-    }).then(() => {
-      handlers.onTypographyChanged();
-      renderSettingsModal(container, handlers);
-    });
-  });
-  bindRange("#set-cc-font-size", (v) => {
-    void persistSettings({
-      typography: { ...state.settings.typography, cc_font_size: Math.round(v) },
-    }).then(() => {
-      renderSettingsModal(container, handlers);
-    });
-  });
+  bindRange(
+    "#set-font-size",
+    (v) => {
+      void persistSettings({
+        typography: { ...state.settings.typography, font_size: Math.round(v) },
+      }).then(() => {
+        handlers.onTypographyChanged();
+        renderSettingsModal(container, handlers);
+      });
+    },
+    (v) => `${Math.round(v)} px`,
+  );
+  bindRange(
+    "#set-line-height",
+    (v) => {
+      void persistSettings({
+        typography: { ...state.settings.typography, line_height: v },
+      }).then(() => {
+        handlers.onTypographyChanged();
+        renderSettingsModal(container, handlers);
+      });
+    },
+    (v) => v.toFixed(2),
+  );
+  bindRange(
+    "#set-cc-font-size",
+    (v) => {
+      void persistSettings({
+        typography: { ...state.settings.typography, cc_font_size: Math.round(v) },
+      }).then(() => {
+        renderSettingsModal(container, handlers);
+      });
+    },
+    (v) => `${Math.round(v)} px`,
+  );
 
   container.querySelector("#btn-open-appdata")?.addEventListener("click", () => {
     if (state.bootstrap?.appdata_dir) {

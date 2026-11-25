@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { invoke, openDialog, saveDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { state } from "../state";
 import type { AppBootstrap, IgnoreRule, PronunciationRule } from "../types";
@@ -55,7 +54,7 @@ export function renderRulesModal(
 
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card" role="dialog" aria-label="${title}">
+      <div class="modal-card mobile-page" role="dialog" aria-label="${title}">
         <div class="modal-header">
           <button class="btn-secondary" style="padding:4px 9px;" id="btn-rules-back">
             ${Icons.chevronLeft()}
@@ -343,7 +342,7 @@ export function renderRulesModal(
   });
 
   container.querySelector("#btn-rules-export")?.addEventListener("click", async () => {
-    const target = await save({
+    const target = await saveDialog({
       defaultPath: isPron ? "bookreader-pronunciations.json" : "bookreader-ignore-rules.json",
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
@@ -357,7 +356,7 @@ export function renderRulesModal(
   });
 
   container.querySelector("#btn-rules-import")?.addEventListener("click", async () => {
-    const picked = await open({
+    const picked = await openDialog({
       multiple: false,
       filters: [{ name: "JSON", extensions: ["json"] }],
     });

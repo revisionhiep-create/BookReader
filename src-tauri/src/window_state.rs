@@ -386,6 +386,7 @@ struct DebounceInner {
 /// Restores saved window geometry with multi-monitor safeguards before showing the window,
 /// then persists move/resize/maximize updates via a debounced background writer and final
 /// `CloseRequested` flush.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn init_window_state(window: WebviewWindow, storage: Arc<Storage>) {
     let monitors = collect_monitors(&window);
     let saved = storage.window_state();

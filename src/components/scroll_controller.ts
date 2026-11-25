@@ -19,15 +19,17 @@ export class ScrollController {
     this.bindEvents();
   }
 
+  public markManualScroll(): void {
+    if (state.tts.status === "playing" && state.autoScrollEnabled) {
+      state.autoScrollEnabled = false;
+      this.userScrollingFlag = true;
+      this.syncBackButton();
+      notify();
+    }
+  }
+
   private bindEvents(): void {
-    const markUserScroll = () => {
-      if (state.tts.status === "playing" && state.autoScrollEnabled) {
-        state.autoScrollEnabled = false;
-        this.userScrollingFlag = true;
-        this.syncBackButton();
-        notify();
-      }
-    };
+    const markUserScroll = () => this.markManualScroll();
 
     this.viewport.addEventListener(
       "wheel",
@@ -86,9 +88,24 @@ export class ScrollController {
       state.activeBook !== null &&
       (state.tts.status === "playing" || state.tts.status === "loading" || state.tts.status === "paused");
     this.backBtn.classList.toggle("visible", show);
+    const isAndroid = document.documentElement.dataset.platform === "android";
     const ccBar = document.getElementById("cc-host");
-    if (show && state.settings.cc_enabled && ccBar && !ccBar.classList.contains("hidden")) {
-      const ccHeight = ccBar.offsetHeight || 78;
+    const ccVisible = state.settings.cc_enabled && ccBar && !ccBar.classList.contains("hidden");
+    const ccHeight = ccVisible ? ccBar.offsetHeight || 78 : 0;
+
+    if (isAndroid && (window.innerWidth < 840 || window.innerHeight <= 520)) {
+      const dockEl = document.getElementById("mobile-dock-host")?.querySelector<HTMLElement>(".mobile-player-dock");
+      const dockHeight = dockEl ? dockEl.offsetHeight : 0;
+      const safeBottomRaw = getComputedStyle(document.documentElement)
+        .getPropertyValue("--safe-bottom")
+        .trim();
+      const safeBottom = Number.parseFloat(safeBottomRaw) || 0;
+      const pillReserve = !dockEl && !ccVisible ? 56 : 0;
+      this.backBtn.style.bottom = `${dockHeight + ccHeight + safeBottom + pillReserve + 14}px`;
+      return;
+    }
+
+    if (show && ccVisible) {
       this.backBtn.style.bottom = `${ccHeight + 16}px`;
     } else {
       this.backBtn.style.bottom = "24px";

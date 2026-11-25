@@ -101,4 +101,15 @@ export const Icons = {
 
   zoomIn: () => svg(`<circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16.2" y2="16.2"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>`, 16),
   zoomOut: () => svg(`<circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16.2" y2="16.2"/><line x1="8" y1="11" x2="14" y2="11"/>`, 16),
+
+  menu: () =>
+    svg(`<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>`, 20),
+
+  textAa: () =>
+    `<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 18 7.5 6 12 18"/>
+      <path d="M4.5 14h6"/>
+      <path d="M15.5 13.5a2.5 2.5 0 0 1 4.5 1.5v3"/>
+      <circle cx="17.5" cy="16.5" r="2"/>
+    </svg>`,
 };

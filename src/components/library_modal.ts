@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { invoke, openDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { state } from "../state";
 import type { BookMeta } from "../types";
@@ -11,10 +10,31 @@ export interface LibraryHandlers {
   onLibraryChanged: () => void;
 }
 
+function pickBookViaInput(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".pdf,.epub,.docx,.txt,application/pdf,application/epub+zip,text/plain";
+    input.style.display = "none";
+    document.body.appendChild(input);
+    const cleanup = () => input.remove();
+    input.addEventListener("change", () => {
+      const file = input.files?.[0] ?? null;
+      cleanup();
+      resolve(file);
+    });
+    input.addEventListener("cancel", () => {
+      cleanup();
+      resolve(null);
+    });
+    input.click();
+  });
+}
+
 export function renderLibraryModal(container: HTMLElement, handlers: LibraryHandlers): void {
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card wide" role="dialog" aria-label="Library">
+      <div class="modal-card wide mobile-page" role="dialog" aria-label="Library">
         <div class="modal-header">
           <div style="display:flex;align-items:center;gap:10px;">
             <span class="modal-title">Library</span>
@@ -74,14 +94,31 @@ export function renderLibraryModal(container: HTMLElement, handlers: LibraryHand
   container.querySelector("#btn-modal-close")?.addEventListener("click", handlers.onClose);
 
   container.querySelector("#btn-import-book")?.addEventListener("click", async () => {
-    const picked = await open({
-      multiple: false,
-      filters: [
-        { name: "Books", extensions: ["pdf", "epub", "docx", "txt"] },
-      ],
-    });
-    if (!picked || typeof picked !== "string") return;
-    const book = await invoke<BookMeta>("import_book_file", { path: picked });
+    let book: BookMeta | null = null;
+    try {
+      const picked = await openDialog({
+        multiple: false,
+        filters: [
+          { name: "Books", extensions: ["pdf", "epub", "docx", "txt"] },
+        ],
+      });
+      if (picked && typeof picked === "string") {
+        if (picked.startsWith("content://")) {
+          throw new Error("Android content URI fallback");
+        }
+        book = await invoke<BookMeta>("import_book_file", { path: picked });
+      }
+    } catch {
+      const file = await pickBookViaInput();
+      if (file) {
+        const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+        book = await invoke<BookMeta>("import_book_bytes", {
+          filename: file.name,
+          bytes,
+        });
+      }
+    }
+    if (!book) return;
     state.library = [book, ...state.library.filter((b) => b.id !== book.id)];
     handlers.onLibraryChanged();
     handlers.onClose();

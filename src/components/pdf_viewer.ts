@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../tauri_bridge";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { notify, persistSettings, state } from "../state";
+import { isAndroidPlatform, notify, persistSettings, state } from "../state";
 import type { BookMeta, SentenceItem, TocEntry } from "../types";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -167,17 +167,26 @@ export class PdfViewer {
     this.refreshVisibleHitLayers(extracted.newCursor);
   }
 
+  private getPageScale(baseWidth: number): number {
+    const zoom = state.settings.typography.pdf_zoom;
+    if (isAndroidPlatform() && window.innerWidth < 600 && this.viewport.clientWidth > 32) {
+      const fitScale = Math.min(1, (this.viewport.clientWidth - 20) / Math.max(1, baseWidth));
+      return fitScale * zoom;
+    }
+    return zoom;
+  }
+
   public rebuildForZoom(): void {
     if (!this.pdfDoc || !this.currentBook) return;
-    const zoom = state.settings.typography.pdf_zoom;
 
     const maxBefore = Math.max(1, this.viewport.scrollHeight - this.viewport.clientHeight);
     const scrollFrac = this.viewport.scrollTop / maxBefore;
 
     this.pageWraps.forEach((card, pageNum) => {
       const base = this.basePageDimensions[pageNum - 1] ?? { width: 700, height: 950 };
-      const w = Math.round(base.width * zoom);
-      const h = Math.round(base.height * zoom);
+      const scale = this.getPageScale(base.width);
+      const w = Math.round(base.width * scale);
+      const h = Math.round(base.height * scale);
       card.style.width = `${w}px`;
       card.style.height = `${h}px`;
       const canvas = card.querySelector<HTMLCanvasElement>(".pdf-canvas");
@@ -239,9 +248,9 @@ export class PdfViewer {
     stack.className = "pdf-stack";
     this.container.appendChild(stack);
 
-    const zoom = state.settings.typography.pdf_zoom;
     for (let p = 1; p <= this.pdfDoc.numPages; p++) {
       const base = this.basePageDimensions[p - 1] ?? { width: 700, height: 950 };
+      const scale = this.getPageScale(base.width);
       const wrap = document.createElement("div");
       wrap.className = "pdf-page-wrap";
 
@@ -249,8 +258,8 @@ export class PdfViewer {
       card.className = state.settings.pdf_invert_dark
         ? "pdf-page-card dark-invert"
         : "pdf-page-card";
-      card.style.width = `${Math.round(base.width * zoom)}px`;
-      card.style.height = `${Math.round(base.height * zoom)}px`;
+      card.style.width = `${Math.round(base.width * scale)}px`;
+      card.style.height = `${Math.round(base.height * scale)}px`;
       card.dataset.page = String(p);
 
       const canvas = document.createElement("canvas");
@@ -264,7 +273,7 @@ export class PdfViewer {
       const topCurtain = document.createElement("div");
       topCurtain.className = "ignore-curtain top";
       topCurtain.innerHTML = `
-        <div class="ignore-handle" data-edge="top">
+        <div class="ignore-handle" data-edge="top" style="touch-action:none;">
           <div class="ignore-line"></div>
           <span class="ignore-pill">Header</span>
         </div>
@@ -274,7 +283,7 @@ export class PdfViewer {
       const botCurtain = document.createElement("div");
       botCurtain.className = "ignore-curtain bottom";
       botCurtain.innerHTML = `
-        <div class="ignore-handle" data-edge="bottom">
+        <div class="ignore-handle" data-edge="bottom" style="touch-action:none;">
           <div class="ignore-line"></div>
           <span class="ignore-pill">Footer</span>
         </div>
@@ -492,10 +501,11 @@ export class PdfViewer {
         const page = await doc.getPage(pageNum);
         if (gen !== this.renderGeneration || this.pdfDoc !== doc) return;
 
-        const zoom = state.settings.typography.pdf_zoom;
+        const base = this.basePageDimensions[pageNum - 1] ?? { width: 700, height: 950 };
+        const scale = this.getPageScale(base.width);
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const vp = page.getViewport({ scale: zoom * dpr });
-        const cssVp = page.getViewport({ scale: zoom });
+        const vp = page.getViewport({ scale: scale * dpr });
+        const cssVp = page.getViewport({ scale });
 
         const canvas = card.querySelector<HTMLCanvasElement>(".pdf-canvas");
         if (!canvas) return;

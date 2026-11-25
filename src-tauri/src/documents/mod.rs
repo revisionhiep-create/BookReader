@@ -14,14 +14,14 @@ use std::path::Path;
 use tauri::http::{Request, Response, StatusCode, header};
 use zip::ZipArchive;
 
-/// Returns the platform-appropriate custom protocol base URL (`http://bookmedia.localhost` on Windows,
-/// `bookmedia://localhost` on macOS/Linux WKWebView).
+/// Returns the platform-appropriate custom protocol base URL (`http://bookmedia.localhost` on Windows
+/// and Android WebView, `bookmedia://localhost` on macOS/Linux WKWebView).
 pub fn media_base_url() -> &'static str {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     {
         "http://bookmedia.localhost"
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         "bookmedia://localhost"
     }
@@ -33,32 +33,28 @@ pub fn media_url(kind: &str, book_id: &str, rel_path: &str) -> String {
     format!("{}/{kind}/{book_id}/{clean}", media_base_url())
 }
 
-/// Copies an external book into `BookReader_Data/books/` and registers it in `library.json`.
-pub fn import_book(source_path: &Path, storage: &Storage) -> Result<BookMeta, String> {
-    let ext = source_path
+fn register_imported_book<F>(original_filename: &str, write_dest: F, storage: &Storage) -> Result<BookMeta, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    let ext = Path::new(original_filename)
         .extension()
         .and_then(|e| e.to_str())
         .ok_or_else(|| "Selected file has no extension".to_string())?;
     let format = BookFormat::from_extension(ext)
         .ok_or_else(|| format!("Unsupported format '.{ext}'. Supported: PDF, EPUB, DOCX, TXT"))?;
 
-    let original_filename = source_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("book")
-        .to_string();
-    let title = source_path
+    let title = Path::new(original_filename)
         .file_stem()
         .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty())
         .unwrap_or("Untitled Book")
         .to_string();
 
     let id = uuid::Uuid::new_v4().to_string();
     let stored_filename = format!("{id}.{}", format.as_ext());
     let dest = storage.paths().book_path(&stored_filename)?;
-
-    fs::copy(source_path, &dest)
-        .map_err(|e| format!("Failed copying book to {}: {e}", dest.display()))?;
+    write_dest(&dest)?;
 
     let settings = storage.settings();
     let now = now_unix_secs();
@@ -67,7 +63,7 @@ pub fn import_book(source_path: &Path, storage: &Storage) -> Result<BookMeta, St
         title,
         format,
         stored_filename,
-        original_filename,
+        original_filename: original_filename.to_string(),
         added_at: now,
         last_opened_at: now,
         current_sentence_idx: 0,
@@ -88,6 +84,40 @@ pub fn import_book(source_path: &Path, storage: &Storage) -> Result<BookMeta, St
     }
 
     storage.upsert_book(book)
+}
+
+/// Copies an external book into `BookReader_Data/books/` and registers it in `library.json`.
+pub fn import_book(source_path: &Path, storage: &Storage) -> Result<BookMeta, String> {
+    let original_filename = source_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("book")
+        .to_string();
+    register_imported_book(
+        &original_filename,
+        |dest| {
+            fs::copy(source_path, dest)
+                .map(|_| ())
+                .map_err(|e| format!("Failed copying book to {}: {e}", dest.display()))
+        },
+        storage,
+    )
+}
+
+/// Writes an uploaded/picked book's raw bytes into `BookReader_Data/books/` (for Android `content://` pickers).
+pub fn import_book_bytes(
+    original_filename: &str,
+    bytes: &[u8],
+    storage: &Storage,
+) -> Result<BookMeta, String> {
+    register_imported_book(
+        original_filename,
+        |dest| {
+            fs::write(dest, bytes)
+                .map_err(|e| format!("Failed writing book to {}: {e}", dest.display()))
+        },
+        storage,
+    )
 }
 
 /// Parses an EPUB, DOCX, or TXT document from disk into HTML + sentences + TOC.

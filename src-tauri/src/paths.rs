@@ -55,6 +55,12 @@ impl AppPaths {
         Self::from_roots(appdata_dir, data_dir)
     }
 
+    /// Initializes Android directories inside Tauri's private `app_data_dir`.
+    #[allow(dead_code)]
+    pub fn init_android(app_data_dir: PathBuf) -> Result<Self, String> {
+        Self::from_roots(app_data_dir.join("config"), app_data_dir.join("BookReader_Data"))
+    }
+
     /// Creates an [`AppPaths`] rooted at explicit directories (used in tests and [`Self::init`]).
     pub fn from_roots(appdata_dir: PathBuf, data_dir: PathBuf) -> Result<Self, String> {
         let models_dir = data_dir.join("models").join("phonon-31m-en");
@@ -380,6 +386,18 @@ mod tests {
             portable_dir.join("BookReader_Data")
         );
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn initializes_android_app_data_roots() {
+        let root = std::env::temp_dir().join(format!("bookreader_android_paths_{}", uuid::Uuid::new_v4()));
+        let paths = AppPaths::init_android(root.clone()).unwrap();
+        assert_eq!(paths.appdata_dir, root.join("config"));
+        assert_eq!(paths.data_dir, root.join("BookReader_Data"));
+        assert!(paths.models_dir.is_dir());
+        assert!(paths.voices_dir.is_dir());
+        assert!(paths.books_dir.is_dir());
         let _ = fs::remove_dir_all(root);
     }
 }

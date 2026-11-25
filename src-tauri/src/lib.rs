@@ -21,7 +21,7 @@ use exporter::ExportManager;
 use media_keys::MediaKeysBridge;
 use paths::AppPaths;
 use sleep_timer::SleepTimer;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use storage::Storage;
 use tauri::Manager;
 use tts::TtsController;
@@ -32,20 +32,51 @@ pub fn run() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let paths = AppPaths::init().expect("Failed to initialize BookReader folders");
-    let storage = Arc::new(Storage::load(paths.clone()).expect("Failed to initialize storage"));
     let downloader = Arc::new(DownloadManager::new().expect("Failed to initialize downloader"));
+    let media_ctx: Arc<OnceLock<(AppPaths, Arc<Storage>)>> = Arc::new(OnceLock::new());
 
-    let storage_for_protocol = Arc::clone(&storage);
-    let paths_for_protocol = paths.clone();
+    #[cfg(not(target_os = "android"))]
+    {
+        let paths = AppPaths::init().expect("Failed to initialize BookReader folders");
+        let storage = Arc::new(Storage::load(paths.clone()).expect("Failed to initialize storage"));
+        let _ = media_ctx.set((paths, storage));
+    }
+
+    let media_ctx_for_protocol = Arc::clone(&media_ctx);
+    let media_ctx_for_setup = Arc::clone(&media_ctx);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("bookmedia", move |_ctx, request| {
-            documents::handle_media_request(&paths_for_protocol, &storage_for_protocol, &request)
+            if let Some((paths, storage)) = media_ctx_for_protocol.get() {
+                documents::handle_media_request(paths, storage, &request)
+            } else {
+                tauri::http::Response::builder()
+                    .status(tauri::http::StatusCode::SERVICE_UNAVAILABLE)
+                    .body(b"Storage initializing".to_vec())
+                    .unwrap()
+            }
         })
         .setup(move |app| {
             let handle = app.handle().clone();
+            let storage = if let Some((_, existing)) = media_ctx_for_setup.get() {
+                Arc::clone(existing)
+            } else {
+                #[cfg(target_os = "android")]
+                let paths = {
+                    let app_data_dir = app
+                        .path()
+                        .app_data_dir()
+                        .map_err(|e| format!("Failed resolving Android app_data_dir: {e}"))?;
+                    AppPaths::init_android(app_data_dir)?
+                };
+                #[cfg(not(target_os = "android"))]
+                let paths = AppPaths::init()?;
+                let st = Arc::new(Storage::load(paths.clone())?);
+                let _ = media_ctx_for_setup.set((paths, Arc::clone(&st)));
+                st
+            };
+
             let tts = TtsController::start(handle.clone(), Arc::clone(&storage))
                 .expect("Failed starting TTS controller");
             let exporter = Arc::new(ExportManager::new(
@@ -55,6 +86,7 @@ pub fn run() {
             let media_keys = Arc::new(MediaKeysBridge::init(&handle, Arc::clone(&tts)));
             let sleep_timer = SleepTimer::start(handle.clone(), Arc::clone(&storage), Arc::clone(&tts));
 
+            #[cfg(not(target_os = "android"))]
             if let Some(main_window) = app.get_webview_window("main") {
                 window_state::init_window_state(main_window, Arc::clone(&storage));
             }
@@ -90,6 +122,7 @@ pub fn run() {
             commands::export_rules_json,
             commands::import_rules_json,
             commands::import_book_file,
+            commands::import_book_bytes,
             commands::open_book,
             commands::set_pdf_sentences,
             commands::update_pdf_margins,

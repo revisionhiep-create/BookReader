@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../tauri_bridge";
 import { Icons } from "../icons";
-import { formatDuration, persistSettings, state } from "../state";
+import { formatDuration, isAndroidPlatform, persistSettings, state } from "../state";
 import type { ActiveModal, SleepTimerStatus } from "../types";
 
 export interface ToolbarHandlers {
@@ -228,6 +228,11 @@ export function syncToolbar(): void {
 
   const speedPill = container.querySelector<HTMLElement>("#btn-speed-pop");
   if (speedPill) speedPill.textContent = `${state.settings.speed.toFixed(2)}x`;
+
+  const volumeBtn = container.querySelector<HTMLButtonElement>("#btn-volume-pop");
+  if (volumeBtn) {
+    volumeBtn.style.display = isAndroidPlatform() ? "none" : "inline-flex";
+  }
 
   container.querySelector("#btn-cc-toggle")?.classList.toggle("active", state.settings.cc_enabled);
 

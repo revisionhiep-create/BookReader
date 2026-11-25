@@ -1,18 +1,31 @@
 import { Icons } from "../icons";
-import { persistSettings, state } from "../state";
+import { isAndroidPlatform, isVoiceCloningEnabled, persistSettings, state } from "../state";
 import type { ActiveModal } from "../types";
 
 export interface SidebarHandlers {
   onOpenModal: (modal: ActiveModal) => void;
+  onCloseDrawer?: () => void;
 }
 
 export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers): void {
+  const isAndroid = isAndroidPlatform();
   const collapsed = state.settings.sidebar_collapsed;
-  container.className = collapsed ? "sidebar collapsed" : "sidebar";
+  if (isAndroid) {
+    container.className = [
+      "sidebar",
+      collapsed ? "collapsed" : "",
+      state.mobileDrawerOpen ? "drawer-open" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  } else {
+    container.className = collapsed ? "sidebar collapsed" : "sidebar";
+  }
 
   const isPlaying = state.tts.status === "playing" || state.tts.status === "loading";
   const bookTitle = state.activeBook ? state.activeBook.title : "No book selected";
-  const clonedCount = state.voices.filter((v) => v.is_cloned).length;
+  const cloningEnabled = isVoiceCloningEnabled();
+  const clonedCount = cloningEnabled ? state.voices.filter((v) => v.is_cloned).length : 0;
   const exp = state.exportProgress;
   const showMiniExport =
     exp && ["preparing", "running", "finalizing"].includes(exp.status);
@@ -60,11 +73,17 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
         ${Icons.exportAudio()}
         <span>Export Audio</span>
       </button>
+      ${
+        cloningEnabled
+          ? `
       <button class="nav-btn" data-modal="voice_clone">
         ${Icons.voiceClone()}
         <span>Voice Cloning</span>
         ${clonedCount > 0 ? `<span class="badge">${clonedCount}</span>` : ""}
       </button>
+      `
+          : ""
+      }
       <button class="nav-btn" data-modal="settings">
         ${Icons.settings()}
         <span>Settings</span>
@@ -89,17 +108,23 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
   `;
 
   container.querySelector("#btn-sidebar-collapse")?.addEventListener("click", () => {
-    void persistSettings({ sidebar_collapsed: true });
+    if (isAndroid && (window.innerWidth < 840 || window.innerHeight <= 520)) {
+      handlers.onCloseDrawer?.();
+    } else {
+      void persistSettings({ sidebar_collapsed: true });
+    }
   });
 
   container.querySelectorAll<HTMLButtonElement>("[data-modal]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const target = btn.dataset.modal as ActiveModal;
+      handlers.onCloseDrawer?.();
       handlers.onOpenModal(target);
     });
   });
 
   container.querySelector("#btn-mini-export")?.addEventListener("click", () => {
+    handlers.onCloseDrawer?.();
     handlers.onOpenModal("export");
   });
 }

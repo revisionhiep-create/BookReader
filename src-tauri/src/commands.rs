@@ -1,6 +1,6 @@
 //! Tauri IPC commands bridging frontend UI actions and Rust backend engines.
 
-use crate::documents::{import_book, load_non_pdf_document, media_base_url};
+use crate::documents::{import_book, import_book_bytes as store_imported_book_bytes, load_non_pdf_document, media_base_url};
 use crate::downloader::DownloadManager;
 use crate::exporter::ExportManager;
 use crate::media_keys::MediaKeysBridge;
@@ -34,10 +34,21 @@ pub struct AppState {
 #[tauri::command]
 pub fn get_bootstrap(state: State<'_, AppState>) -> AppBootstrap {
     let paths = state.storage.paths();
-    let cloned = state.storage.cloned_voices();
-    let settings = state.storage.settings();
+    let voice_cloning_enabled = cfg!(feature = "voice-cloning") && !cfg!(target_os = "android");
+    let cloned = if voice_cloning_enabled {
+        state.storage.cloned_voices()
+    } else {
+        Vec::new()
+    };
+    let mut settings = state.storage.settings();
+    if !voice_cloning_enabled && AppPaths::is_cloned_voice_id(&settings.voice_id) {
+        settings.voice_id = pick_downloaded_fallback_voice(paths);
+        let _ = state.storage.save_settings(settings.clone());
+    }
     let variant = settings.qwen_model_variant;
-    let platform = if cfg!(target_os = "macos") {
+    let platform = if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(target_os = "windows") {
         "windows"
@@ -48,12 +59,17 @@ pub fn get_bootstrap(state: State<'_, AppState>) -> AppBootstrap {
         model_ready: paths.model_ready(),
         engine_loaded: state.tts.is_model_loaded(),
         qwen_model_variant: variant,
-        qwen_model_ready: paths.qwen_model_ready_for(variant),
-        qwen_device_label: state.tts.engine().qwen().device_label(),
+        qwen_model_ready: voice_cloning_enabled && paths.qwen_model_ready_for(variant),
+        qwen_device_label: if voice_cloning_enabled {
+            state.tts.engine().qwen().device_label()
+        } else {
+            "Disabled".to_string()
+        },
         appdata_dir: paths.appdata_dir.to_string_lossy().into_owned(),
         data_dir: paths.data_dir.to_string_lossy().into_owned(),
         media_base_url: media_base_url().to_string(),
         platform: platform.to_string(),
+        voice_cloning_enabled,
         settings,
         library: state.storage.library(),
         pronunciations: state.storage.pronunciations(),
@@ -490,6 +506,15 @@ pub fn import_book_file(state: State<'_, AppState>, path: String) -> Result<Book
 }
 
 #[tauri::command]
+pub fn import_book_bytes(
+    state: State<'_, AppState>,
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<BookMeta, String> {
+    store_imported_book_bytes(&filename, &bytes, &state.storage)
+}
+
+#[tauri::command]
 pub fn open_book(state: State<'_, AppState>, book_id: String) -> Result<DocumentPayload, String> {
     let mut book = state
         .storage
@@ -753,41 +778,49 @@ pub fn set_sleep_timer(
 
 #[tauri::command]
 pub fn open_folder_in_explorer(path: String) -> Result<(), String> {
-    let p = PathBuf::from(&path);
-    #[cfg(target_os = "windows")]
+    #[cfg(target_os = "android")]
     {
-        let dir = if p.is_file() {
-            p.parent().unwrap_or(&p).to_path_buf()
-        } else {
-            p
-        };
-        std::process::Command::new("explorer")
-            .arg(dir)
-            .spawn()
-            .map_err(|e| format!("Failed opening Explorer: {e}"))?;
+        let _ = path;
+        return Err("Folder explorer is not available on Android".to_string());
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "android"))]
     {
-        let mut cmd = std::process::Command::new("open");
-        if p.is_file() {
-            cmd.arg("-R").arg(&p);
-        } else {
-            cmd.arg(&p);
+        let p = PathBuf::from(&path);
+        #[cfg(target_os = "windows")]
+        {
+            let dir = if p.is_file() {
+                p.parent().unwrap_or(&p).to_path_buf()
+            } else {
+                p
+            };
+            std::process::Command::new("explorer")
+                .arg(dir)
+                .spawn()
+                .map_err(|e| format!("Failed opening Explorer: {e}"))?;
         }
-        cmd.spawn()
-            .map_err(|e| format!("Failed opening Finder: {e}"))?;
+        #[cfg(target_os = "macos")]
+        {
+            let mut cmd = std::process::Command::new("open");
+            if p.is_file() {
+                cmd.arg("-R").arg(&p);
+            } else {
+                cmd.arg(&p);
+            }
+            cmd.spawn()
+                .map_err(|e| format!("Failed opening Finder: {e}"))?;
+        }
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        {
+            let dir = if p.is_file() {
+                p.parent().unwrap_or(&p).to_path_buf()
+            } else {
+                p
+            };
+            std::process::Command::new("xdg-open")
+                .arg(dir)
+                .spawn()
+                .map_err(|e| format!("Failed opening file manager: {e}"))?;
+        }
+        Ok(())
     }
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        let dir = if p.is_file() {
-            p.parent().unwrap_or(&p).to_path_buf()
-        } else {
-            p
-        };
-        std::process::Command::new("xdg-open")
-            .arg(dir)
-            .spawn()
-            .map_err(|e| format!("Failed opening file manager: {e}"))?;
-    }
-    Ok(())
 }

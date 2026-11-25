@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { state } from "../state";
 import { escapeHtml } from "./sidebar";
@@ -21,7 +21,7 @@ export function renderSetupModal(container: HTMLElement, handlers: SetupModalHan
 
   container.innerHTML = `
     <div class="modal-backdrop">
-      <div class="modal-card" role="dialog" aria-label="Setup Phonon 31M">
+      <div class="modal-card mobile-page" role="dialog" aria-label="Setup Phonon 31M">
         <div class="modal-header">
           <div style="display:flex;align-items:center;gap:8px;">
             ${Icons.brandLogo(20)}

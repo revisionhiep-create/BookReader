@@ -1,9 +1,13 @@
 import "./styles/tokens.css";
 import "./styles/app.css";
+import "../android/ui/android.css";
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import {
+  closeAllMobileOverlays,
+  initMobileChrome,
+  syncMobileChrome,
+} from "../android/ui/mobile_chrome";
+import { invoke, listen, openDialog } from "./tauri_bridge";
 import { renderCcBar, resetCcClockForSeek, syncCcPlaybackClock } from "./components/cc_bar";
 import { renderExportModal } from "./components/export_modal";
 import { renderLibraryModal } from "./components/library_modal";
@@ -29,7 +33,14 @@ import {
 } from "./components/voice_clone_modal";
 import { renderVoicePickerModal } from "./components/voice_picker";
 import { Icons } from "./icons";
-import { persistSettings, state, subscribe } from "./state";
+import {
+  isAndroidPlatform,
+  isPreviewAndroidMode,
+  isVoiceCloningEnabled,
+  persistSettings,
+  state,
+  subscribe,
+} from "./state";
 import type {
   ActiveModal,
   AppBootstrap,
@@ -44,8 +55,10 @@ import type {
 const root = document.querySelector<HTMLElement>("#app")!;
 root.innerHTML = `
   <div class="app-shell">
+    <div id="mobile-drawer-backdrop" class="mobile-drawer-backdrop"></div>
     <aside id="sidebar" class="sidebar"></aside>
     <main class="main-col">
+      <div id="mobile-topbar-host" class="mobile-topbar-host"></div>
       <header id="toolbar-host"></header>
       <div id="search-host" style="display:none;"></div>
       <div id="loading-banner" class="loading-banner hidden" role="status" aria-live="polite"></div>
@@ -54,13 +67,17 @@ root.innerHTML = `
       </div>
       <button id="back-to-reading-btn" class="back-to-reading-btn" type="button"></button>
       <div id="cc-host" class="cc-bar hidden"></div>
+      <div id="mobile-dock-host" class="mobile-dock-host"></div>
     </main>
   </div>
+  <div id="mobile-sheet-host" class="mobile-sheet-host"></div>
   <div id="modal-host"></div>
   <div id="toast-host"></div>
 `;
 
 const sidebarEl = document.getElementById("sidebar")!;
+const mobileDrawerBackdropEl = document.getElementById("mobile-drawer-backdrop")!;
+const mobileTopbarHostEl = document.getElementById("mobile-topbar-host")!;
 const toolbarEl = document.getElementById("toolbar-host")!;
 const searchEl = document.getElementById("search-host")!;
 const loadingBannerEl = document.getElementById("loading-banner")!;
@@ -68,6 +85,8 @@ const viewportEl = document.getElementById("reader-viewport")!;
 const viewerHostEl = document.getElementById("viewer-host")!;
 const backBtnEl = document.getElementById("back-to-reading-btn") as HTMLButtonElement;
 const ccHostEl = document.getElementById("cc-host")!;
+const mobileDockHostEl = document.getElementById("mobile-dock-host")!;
+const mobileSheetHostEl = document.getElementById("mobile-sheet-host")!;
 const modalHostEl = document.getElementById("modal-host")!;
 const toastHostEl = document.getElementById("toast-host")!;
 
@@ -144,6 +163,12 @@ const pdfViewer = new PdfViewer(
 );
 
 function openModal(modal: ActiveModal): void {
+  if (modal === "voice_clone" && !isVoiceCloningEnabled()) {
+    return;
+  }
+  state.quickReaderSheetOpen = false;
+  state.mobilePopoverSheet = null;
+  state.mobileDrawerOpen = false;
   if (modal === "pronunciation" || modal === "ignore") {
     resetRulesModalDraft();
   } else if (modal === "voice_clone") {
@@ -151,6 +176,9 @@ function openModal(modal: ActiveModal): void {
   }
   state.activeModal = modal;
   renderModal();
+  if (isAndroidPlatform()) {
+    syncMobileChrome();
+  }
 }
 
 function closeModal(): void {
@@ -266,7 +294,7 @@ function renderEmptyWelcome(): void {
   `;
 
   viewerHostEl.querySelector("#btn-empty-import")?.addEventListener("click", async () => {
-    const picked = await open({
+    const picked = await openDialog({
       multiple: false,
       filters: [{ name: "Books", extensions: ["pdf", "epub", "docx", "txt"] }],
     });
@@ -284,11 +312,17 @@ function renderEmptyWelcome(): void {
 function renderChrome(): void {
   renderSidebar(sidebarEl, {
     onOpenModal: openModal,
+    onCloseDrawer: () => {
+      state.mobileDrawerOpen = false;
+      syncMobileChrome();
+    },
   });
 
   syncToolbar();
-
   renderCcBar(ccHostEl);
+  if (isAndroidPlatform()) {
+    syncMobileChrome();
+  }
   syncLoadingBanner();
   scrollCtrl.syncBackButton();
   if (!state.activeBook) {
@@ -334,8 +368,8 @@ function applyCcSize(nextRaw: number): void {
   void persistSettings({ typography: { ...t, cc_font_size: next } });
 }
 
-function mountToolbarOnce(): void {
-  initToolbar(toolbarEl, {
+function getPlaybackActions() {
+  return {
     onOpenModal: openModal,
     onTogglePlay: () => {
       void (async () => {
@@ -348,7 +382,7 @@ function mountToolbarOnce(): void {
         }
       })();
     },
-    onStep: (delta) => {
+    onStep: (delta: number) => {
       void (async () => {
         state.autoScrollEnabled = true;
         resetCcClockForSeek();
@@ -359,13 +393,13 @@ function mountToolbarOnce(): void {
         renderChrome();
       })();
     },
-    onSeekSentence: (idx) => {
+    onSeekSentence: (idx: number) => {
       void jumpAndPlay(idx);
     },
     onZoomStep: stepPageZoom,
     onZoomReset: resetPageZoom,
     onTogglePdfInvert: togglePdfInvert,
-    onCcSizeStep: (delta) => applyCcSize(state.settings.typography.cc_font_size + delta),
+    onCcSizeStep: (delta: number) => applyCcSize(state.settings.typography.cc_font_size + delta),
     onCcSizeReset: () => applyCcSize(21),
     onToggleSearch: () => {
       state.searchOpen = !state.searchOpen;
@@ -400,7 +434,29 @@ function mountToolbarOnce(): void {
         showToast("Bookmark added");
       })();
     },
-  });
+  };
+}
+
+function mountToolbarOnce(): void {
+  const actions = getPlaybackActions();
+  initToolbar(toolbarEl, actions);
+  if (isAndroidPlatform()) {
+    initMobileChrome(
+      {
+        topbarHost: mobileTopbarHostEl,
+        dockHost: mobileDockHostEl,
+        drawerBackdrop: mobileDrawerBackdropEl,
+        sheetHost: mobileSheetHostEl,
+        ccHost: ccHostEl,
+        sidebarHost: sidebarEl,
+      },
+      {
+        ...actions,
+        onTypographyChanged: () => richViewer.applyTypography(),
+        onLayoutChanged: () => scrollCtrl.syncBackButton(),
+      },
+    );
+  }
 }
 
 function renderSearch(): void {
@@ -500,6 +556,14 @@ function renderModal(): void {
 }
 
 async function initApp(): Promise<void> {
+  if (isPreviewAndroidMode() && !window.__TAURI_INTERNALS__) {
+    const mod = await import("../android/preview/mock_tauri");
+    mod.installPreviewMock();
+    document.documentElement.setAttribute("data-preview", "true");
+    installPreviewTouchScroll();
+    attachPreviewMessageHandler();
+  }
+
   setBusyLoading("Warming up voice model and loading library, please wait...");
   viewerHostEl.innerHTML = `
     <div class="pdf-loading-card">
@@ -525,6 +589,10 @@ async function initApp(): Promise<void> {
   state.voices = boot.voices;
 
   document.documentElement.setAttribute("data-theme", boot.settings.theme);
+  document.documentElement.setAttribute(
+    "data-platform",
+    isPreviewAndroidMode() ? "android" : boot.platform,
+  );
 
   await listen<TtsStateEvent>("tts:state", (ev) => {
     const prevSid = state.tts.sentence_idx;
@@ -679,6 +747,9 @@ window.addEventListener("keydown", (e) => {
       closeModal();
       return;
     }
+    if (isAndroidPlatform() && closeAllMobileOverlays()) {
+      return;
+    }
     if (state.searchOpen) {
       state.searchOpen = false;
       state.searchHits = [];
@@ -729,5 +800,232 @@ window.addEventListener("keydown", (e) => {
     })();
   }
 });
+
+let pinchStartDist: number | null = null;
+let pinchLastAppliedDist = 0;
+
+viewportEl.addEventListener(
+  "touchstart",
+  (e) => {
+    if (!isAndroidPlatform() || e.touches.length !== 2) return;
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    pinchStartDist = Math.hypot(dx, dy);
+    pinchLastAppliedDist = pinchStartDist;
+  },
+  { passive: true },
+);
+
+viewportEl.addEventListener(
+  "touchmove",
+  (e) => {
+    if (!isAndroidPlatform() || pinchStartDist === null || e.touches.length !== 2) return;
+    if (!state.activeBook || state.activeModal !== null) return;
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const dist = Math.hypot(dx, dy);
+    const delta = dist - pinchLastAppliedDist;
+    if (Math.abs(delta) >= 34) {
+      e.preventDefault();
+      pinchLastAppliedDist = dist;
+      stepPageZoom(delta > 0 ? 0.1 : -0.1);
+    }
+  },
+  { passive: false },
+);
+
+viewportEl.addEventListener(
+  "touchend",
+  (e) => {
+    if (e.touches.length < 2) {
+      pinchStartDist = null;
+    }
+  },
+  { passive: true },
+);
+
+function installPreviewTouchScroll(): void {
+  let activeEl: HTMLElement | null = null;
+  let pointerId = -1;
+  let startX = 0;
+  let startY = 0;
+  let lastX = 0;
+  let lastY = 0;
+  let lastTs = 0;
+  let vx = 0;
+  let vy = 0;
+  let dragging = false;
+  let momentumRaf = 0;
+
+  const stopMomentum = () => {
+    if (momentumRaf) {
+      window.cancelAnimationFrame(momentumRaf);
+      momentumRaf = 0;
+    }
+  };
+
+  const findScrollContainer = (target: EventTarget | null): HTMLElement | null => {
+    let el = target instanceof HTMLElement ? target : null;
+    while (el) {
+      if (
+        el.matches(".reader-viewport, .modal-body, .sidebar-nav, .rules-list, .cc-bar") &&
+        (el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2)
+      ) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  };
+
+  document.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "mouse" || e.button !== 0) return;
+    const targetEl = e.target as HTMLElement | null;
+    if (
+      targetEl?.closest(
+        "input, textarea, select, button, a, label, .ignore-handle, #m-progress-track, #progress-seek-track",
+      )
+    ) {
+      return;
+    }
+    const scroller = findScrollContainer(e.target);
+    if (!scroller) return;
+
+    stopMomentum();
+    activeEl = scroller;
+    pointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    lastTs = performance.now();
+    vx = 0;
+    vy = 0;
+    dragging = false;
+  });
+
+  document.addEventListener("pointermove", (e) => {
+    if (!activeEl || e.pointerId !== pointerId) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    const totalDist = Math.hypot(e.clientX - startX, e.clientY - startY);
+
+    if (!dragging) {
+      if (totalDist < 6) return;
+      dragging = true;
+      document.documentElement.classList.add("preview-dragging");
+      if (activeEl.id === "reader-viewport") {
+        scrollCtrl.markManualScroll();
+      }
+    }
+
+    const now = performance.now();
+    const dt = Math.max(1, now - lastTs);
+    vx = dx / dt;
+    vy = dy / dt;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    lastTs = now;
+
+    activeEl.scrollTop -= dy;
+    activeEl.scrollLeft -= dx;
+  });
+
+  const endDrag = (e: PointerEvent) => {
+    if (!activeEl || e.pointerId !== pointerId) return;
+    const scroller = activeEl;
+    const wasDragging = dragging;
+    const releaseVx = vx;
+    const releaseVy = vy;
+
+    activeEl = null;
+    pointerId = -1;
+    dragging = false;
+    document.documentElement.classList.remove("preview-dragging");
+
+    if (!wasDragging) return;
+
+    const suppressClick = (ev: MouseEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+    document.addEventListener("click", suppressClick, { capture: true, once: true });
+    window.setTimeout(() => {
+      document.removeEventListener("click", suppressClick, { capture: true });
+    }, 80);
+
+    // Gentle momentum glide matching touch flicks
+    let velY = Math.max(-2.2, Math.min(2.2, releaseVy)) * 16;
+    let velX = Math.max(-2.2, Math.min(2.2, releaseVx)) * 16;
+    if (Math.hypot(velX, velY) > 1.2) {
+      const step = () => {
+        scroller.scrollTop -= velY;
+        scroller.scrollLeft -= velX;
+        velY *= 0.92;
+        velX *= 0.92;
+        if (Math.hypot(velX, velY) > 0.35) {
+          momentumRaf = window.requestAnimationFrame(step);
+        } else {
+          momentumRaf = 0;
+        }
+      };
+      momentumRaf = window.requestAnimationFrame(step);
+    }
+  };
+
+  document.addEventListener("pointerup", endDrag);
+  document.addEventListener("pointercancel", endDrag);
+}
+
+function attachPreviewMessageHandler(): void {
+  window.addEventListener("message", (ev) => {
+    const data = ev.data as { type?: string; [k: string]: unknown } | null;
+    if (!data || typeof data.type !== "string") return;
+    switch (data.type) {
+      case "preview:set-theme":
+        void persistSettings({ theme: data.theme === "light" ? "light" : "dark" });
+        break;
+      case "preview:toggle-cc":
+        void persistSettings({ cc_enabled: Boolean(data.enabled) });
+        break;
+      case "preview:toggle-dock":
+        state.mobileDockCollapsed = Boolean(data.collapsed);
+        syncMobileChrome();
+        break;
+      case "preview:toggle-play":
+        void getPlaybackActions().onTogglePlay();
+        break;
+      case "preview:open-modal": {
+        const target = (data.modal as ActiveModal) ?? null;
+        closeAllMobileOverlays();
+        if (target === null) {
+          closeModal();
+        } else {
+          openModal(target);
+        }
+        break;
+      }
+      case "preview:open-drawer":
+        closeModal();
+        state.quickReaderSheetOpen = false;
+        state.mobilePopoverSheet = null;
+        state.mobileDrawerOpen = Boolean(data.open);
+        renderChrome();
+        break;
+      case "preview:open-quick-sheet":
+        closeModal();
+        state.mobileDrawerOpen = false;
+        state.mobilePopoverSheet = null;
+        state.quickReaderSheetOpen = Boolean(data.open);
+        renderChrome();
+        break;
+      case "preview:set-insets":
+        document.documentElement.style.setProperty("--preview-safe-top", `${Number(data.top ?? 0)}px`);
+        document.documentElement.style.setProperty("--preview-safe-bottom", `${Number(data.bottom ?? 0)}px`);
+        scrollCtrl.syncBackButton();
+        break;
+    }
+  });
+}
 
 void initApp();

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./tauri_bridge";
 import type {
   ActiveModal,
   AppBootstrap,
@@ -39,6 +39,10 @@ export interface ClientState {
   searchFocusedSid: number | null;
   pdfMarginsEditing: boolean;
   autoScrollEnabled: boolean;
+  mobileDrawerOpen: boolean;
+  mobileDockCollapsed: boolean;
+  quickReaderSheetOpen: boolean;
+  mobilePopoverSheet: null | "speed" | "sleep";
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -114,7 +118,27 @@ export const state: ClientState = {
   searchFocusedSid: null,
   pdfMarginsEditing: false,
   autoScrollEnabled: true,
+  mobileDrawerOpen: false,
+  mobileDockCollapsed: false,
+  quickReaderSheetOpen: false,
+  mobilePopoverSheet: null,
 };
+
+export function isPreviewAndroidMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("preview") === "android";
+}
+
+export function isAndroidPlatform(): boolean {
+  return state.bootstrap?.platform === "android" || isPreviewAndroidMode();
+}
+
+export function isVoiceCloningEnabled(): boolean {
+  if (state.bootstrap?.voice_cloning_enabled !== undefined) {
+    return state.bootstrap.voice_cloning_enabled;
+  }
+  return !isAndroidPlatform();
+}
 
 type Listener = () => void;
 const listeners = new Set<Listener>();

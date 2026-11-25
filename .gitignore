@@ -10,6 +10,8 @@ Bookreader/
 *.dmg
 macos/dist/
 macos/staging/
+android/dist/
+*.apk
 *.pdb
 .DS_Store
 Thumbs.db

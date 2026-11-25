@@ -508,6 +508,8 @@ impl SleepInhibitor {
             .stderr(std::process::Stdio::null())
             .spawn()
             .ok();
+        #[cfg(target_os = "android")]
+        crate::media_keys::set_android_wake_lock(true);
 
         Self {
             #[cfg(target_os = "macos")]
@@ -528,6 +530,8 @@ impl Drop for SleepInhibitor {
             let _ = child.kill();
             let _ = child.wait();
         }
+        #[cfg(target_os = "android")]
+        crate::media_keys::set_android_wake_lock(false);
     }
 }
 
