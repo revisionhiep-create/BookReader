@@ -509,7 +509,15 @@ pub fn import_book_file(state: State<'_, AppState>, path: String) -> Result<Book
         let tmp_dir = state.storage.paths().data_dir.join("import_tmp");
         let copied = crate::media_keys::copy_android_content_uri(&path, &tmp_dir)?;
         let res = import_book(&copied, &state.storage);
-        let _ = std::fs::remove_file(&copied);
+        if let Some(parent) = copied.parent() {
+            if parent != tmp_dir.as_path() && parent.starts_with(&tmp_dir) {
+                let _ = std::fs::remove_dir_all(parent);
+            } else {
+                let _ = std::fs::remove_file(&copied);
+            }
+        } else {
+            let _ = std::fs::remove_file(&copied);
+        }
         return res;
     }
     import_book(Path::new(&path), &state.storage)

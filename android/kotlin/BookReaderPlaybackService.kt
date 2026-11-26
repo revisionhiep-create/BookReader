@@ -17,7 +17,9 @@ import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 
 /**
@@ -31,6 +33,7 @@ class BookReaderPlaybackService : Service() {
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
     private var noisyReceiverRegistered = false
+    private var isForeground = false
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -42,6 +45,7 @@ class BookReaderPlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        appContext = applicationContext
         instance = this
         safeBindJvm()
         ensureNotificationChannel()
@@ -156,7 +160,20 @@ class BookReaderPlaybackService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
+            isForeground = true
         } else {
+            if (!isForeground && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+            }
+            isForeground = false
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -288,6 +305,7 @@ class BookReaderPlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        isForeground = false
         releaseWakeLockInternal()
         abandonAudioFocus()
         if (noisyReceiverRegistered) {
@@ -322,6 +340,8 @@ class BookReaderPlaybackService : Service() {
         private const val EXTRA_PAUSED = "paused"
 
         @Volatile
+        private var appContext: Context? = null
+        @Volatile
         private var instance: BookReaderPlaybackService? = null
         @Volatile
         private var currentTitle: String = "BookReader"
@@ -329,6 +349,16 @@ class BookReaderPlaybackService : Service() {
         private var currentPlaying: Boolean = false
         @Volatile
         private var currentPaused: Boolean = false
+
+        private val mainHandler = Handler(Looper.getMainLooper())
+        private val exportWakeLockLock = Any()
+        @Volatile
+        private var exportWakeLock: PowerManager.WakeLock? = null
+
+        @JvmStatic
+        fun initAppContext(context: Context) {
+            appContext = context.applicationContext
+        }
 
         @JvmStatic
         external fun nativeBindJvm()
@@ -355,14 +385,40 @@ class BookReaderPlaybackService : Service() {
             currentTitle = title
             currentPlaying = playing
             currentPaused = paused
-            val svc = instance ?: return
-            svc.applyState(title, playing, paused)
+            mainHandler.post {
+                val svc = instance
+                if (svc != null) {
+                    svc.applyState(currentTitle, currentPlaying, currentPaused)
+                } else if (currentPlaying || currentPaused) {
+                    appContext?.let { ctx ->
+                        try {
+                            syncFromApp(ctx, currentTitle, currentPlaying, currentPaused)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            }
         }
 
         @JvmStatic
         fun setWakeLockFromNative(hold: Boolean) {
-            val svc = instance ?: return
-            if (hold) svc.acquireWakeLockInternal() else svc.releaseWakeLockInternal()
+            synchronized(exportWakeLockLock) {
+                if (hold) {
+                    val ctx = appContext ?: instance?.applicationContext ?: return
+                    val wl = exportWakeLock ?: (ctx.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BookReader::ExportWakeLock")
+                        .apply { setReferenceCounted(false) }
+                        .also { exportWakeLock = it }
+                    if (!wl.isHeld) {
+                        wl.acquire(4 * 60 * 60 * 1000L)
+                    }
+                } else {
+                    val wl = exportWakeLock ?: return
+                    if (wl.isHeld) {
+                        wl.release()
+                    }
+                }
+            }
         }
 
         fun syncFromApp(context: Context, title: String, playing: Boolean, paused: Boolean) {

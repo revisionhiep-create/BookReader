@@ -15,7 +15,9 @@ if [[ ! -d "$GEN_ANDROID" ]]; then
   echo "==> Initializing Tauri Android project"
   npx tauri android init --ci --skip-targets-install --config android/tauri.android.conf.json
 fi
-npx tauri icon src-tauri/icons/icon.png --fit contain || true
+if [[ -f "$REPO_ROOT/src-tauri/icons/icon.png" ]]; then
+  npx tauri icon src-tauri/icons/icon.png --fit contain
+fi
 grep -n "minSdk" "$GEN_ANDROID/app/build.gradle.kts" || true
 
 echo "==> Installing BookReaderPlaybackService.kt and patching AndroidManifest.xml"
@@ -111,14 +113,16 @@ for t in "${TARGETS[@]}"; do
   esac
 done
 
+APK_DIR="$GEN_ANDROID/app/build/outputs/apk"
+rm -rf "$APK_DIR"
+
 echo "==> Building Android APK (mode=$MODE targets=${TARGETS[*]})"
 npx tauri android build \
   --apk \
-  "${EXTRA_FLAGS[@]}" \
+  ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} \
   --target "${TARGETS[@]}" \
   --config android/tauri.android.conf.json
 
-APK_DIR="$GEN_ANDROID/app/build/outputs/apk"
 DIST_DIR="$SCRIPT_DIR/dist"
 mkdir -p "$DIST_DIR"
 
@@ -136,12 +140,20 @@ sign_if_needed() {
     apksigner="$(find "$sdk_root/build-tools" -name apksigner -type f | sort -V | tail -n 1 || true)"
   fi
   if [[ -z "$apksigner" ]]; then
-    echo "WARNING: apksigner not found; copying unsigned APK to $out_apk" >&2
-    cp -f "$src_apk" "$out_apk"
-    return 0
+    echo "ERROR: apksigner not found under Android SDK build-tools; cannot sign $src_apk" >&2
+    exit 1
   fi
 
-  local ks="${ANDROID_KEYSTORE_PATH:-$HOME/.android/debug.keystore}"
+  local ks=""
+  if [[ -n "${ANDROID_KEYSTORE_PATH:-}" ]]; then
+    ks="$ANDROID_KEYSTORE_PATH"
+    if [[ ! -f "$ks" ]]; then
+      echo "ERROR: Explicit ANDROID_KEYSTORE_PATH not found: $ks" >&2
+      exit 1
+    fi
+  else
+    ks="$HOME/.android/debug.keystore"
+  fi
   local ks_pass="${ANDROID_KEYSTORE_PASS:-android}"
   local key_alias="${ANDROID_KEY_ALIAS:-androiddebugkey}"
   local key_pass="${ANDROID_KEY_PASS:-android}"
@@ -166,13 +178,27 @@ sign_if_needed() {
 find_and_stage() {
   local pattern="$1"
   local dest_name="$2"
-  local found=""
-  found="$(find "$APK_DIR" -type f -name "$pattern" | head -n 1 || true)"
-  if [[ -z "$found" ]]; then
-    echo "ERROR: No APK matching $pattern in $APK_DIR" >&2
+  local fallback_pattern="${3:-}"
+  local matches=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && matches+=("$line")
+  done < <(find "$APK_DIR" -type f -path "*/release/*" -name "$pattern" | sort)
+
+  if [[ ${#matches[@]} -eq 0 && -n "$fallback_pattern" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && matches+=("$line")
+    done < <(find "$APK_DIR" -type f -path "*/release/*" -name "$fallback_pattern" | sort)
+  fi
+
+  if [[ ${#matches[@]} -eq 0 ]]; then
+    echo "ERROR: No release APK matching $pattern in $APK_DIR" >&2
     exit 1
   fi
-  sign_if_needed "$found" "$DIST_DIR/$dest_name"
+  if [[ ${#matches[@]} -gt 1 ]]; then
+    echo "ERROR: Ambiguous release APKs matching $pattern: ${matches[*]}" >&2
+    exit 1
+  fi
+  sign_if_needed "${matches[0]}" "$DIST_DIR/$dest_name"
   echo "Staged $DIST_DIR/$dest_name"
 }
 
@@ -185,9 +211,9 @@ if [[ "$MODE" == "split" ]]; then
 elif [[ "$MODE" == "universal" ]]; then
   find_and_stage "*universal*.apk" "BookReader-android-universal.apk"
 elif [[ "$MODE" == "aarch64" ]]; then
-  find_and_stage "*.apk" "BookReader-android-arm64.apk"
+  find_and_stage "*arm64*.apk" "BookReader-android-arm64.apk" "*universal*.apk"
 elif [[ "$MODE" == "x86_64" ]]; then
-  find_and_stage "*.apk" "BookReader-android-x86_64.apk"
+  find_and_stage "*x86_64*.apk" "BookReader-android-x86_64.apk" "*universal*.apk"
 fi
 
 ls -lh "$DIST_DIR"

@@ -7,10 +7,10 @@ import {
   initMobileChrome,
   syncMobileChrome,
 } from "../android/ui/mobile_chrome";
-import { invoke, listen, openDialog } from "./tauri_bridge";
+import { invoke, listen } from "./tauri_bridge";
 import { renderCcBar, resetCcClockForSeek, syncCcPlaybackClock } from "./components/cc_bar";
 import { renderExportModal } from "./components/export_modal";
-import { renderLibraryModal } from "./components/library_modal";
+import { pickAndImportBook, renderLibraryModal } from "./components/library_modal";
 import { PdfViewer } from "./components/pdf_viewer";
 import { RichViewer } from "./components/rich_viewer";
 import { resetRulesModalDraft, renderRulesModal } from "./components/rules_modal";
@@ -51,6 +51,10 @@ import type {
   SleepTimerStatus,
   TtsStateEvent,
 } from "./types";
+
+if (isPreviewAndroidMode() || /Android/i.test(navigator.userAgent)) {
+  document.documentElement.setAttribute("data-platform", "android");
+}
 
 const root = document.querySelector<HTMLElement>("#app")!;
 root.innerHTML = `
@@ -295,13 +299,8 @@ function renderEmptyWelcome(): void {
 
   viewerHostEl.querySelector("#btn-empty-import")?.addEventListener("click", async () => {
     try {
-      const picked = await openDialog({
-        multiple: false,
-        filters: [{ name: "Books", extensions: ["pdf", "epub", "docx", "txt"] }],
-      });
-      if (!picked || typeof picked !== "string") return;
-      setBusyLoading("Importing book...");
-      const book = await invoke<BookMeta>("import_book_file", { path: picked });
+      const book = await pickAndImportBook((msg) => setBusyLoading(msg));
+      if (!book) return;
       state.library = [book, ...state.library.filter((b) => b.id !== book.id)];
       await openBookById(book.id);
     } catch (err) {
@@ -316,7 +315,7 @@ function renderEmptyWelcome(): void {
   });
 }
 
-function renderChrome(): void {
+function renderSidebarChrome(): void {
   renderSidebar(sidebarEl, {
     onOpenModal: openModal,
     onCloseDrawer: () => {
@@ -324,6 +323,10 @@ function renderChrome(): void {
       syncMobileChrome();
     },
   });
+}
+
+function renderChrome(): void {
+  renderSidebarChrome();
 
   syncToolbar();
   renderCcBar(ccHostEl);
@@ -461,6 +464,7 @@ function mountToolbarOnce(): void {
         ...actions,
         onTypographyChanged: () => richViewer.applyTypography(),
         onLayoutChanged: () => scrollCtrl.syncBackButton(),
+        onToast: showToast,
       },
     );
   }
@@ -580,13 +584,34 @@ async function initApp(): Promise<void> {
     </div>
   `;
 
-  let boot: AppBootstrap;
-  try {
-    boot = await invoke<AppBootstrap>("get_bootstrap");
-  } catch (err) {
+  let boot: AppBootstrap | null = null;
+  let lastBootErr: unknown = null;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    try {
+      boot = await invoke<AppBootstrap>("get_bootstrap");
+      break;
+    } catch (err) {
+      lastBootErr = err;
+      await new Promise((r) => window.setTimeout(r, 250));
+    }
+  }
+  if (!boot) {
     setBusyLoading(null);
-    showToast(`Startup failed: ${String(err)}`);
-    throw err;
+    const errMsg = String(lastBootErr ?? "Unknown startup error");
+    showToast(`Startup failed: ${errMsg}`);
+    viewerHostEl.innerHTML = `
+      <div class="empty-welcome">
+        <h2>Could not start BookReader</h2>
+        <p>${escapeHtml(errMsg)}</p>
+        <div style="display:flex;gap:10px;">
+          <button class="btn-primary" id="btn-boot-retry">Retry</button>
+        </div>
+      </div>
+    `;
+    viewerHostEl.querySelector("#btn-boot-retry")?.addEventListener("click", () => {
+      void initApp();
+    });
+    return;
   }
 
   state.bootstrap = boot;
@@ -642,7 +667,7 @@ async function initApp(): Promise<void> {
 
   await listen<ExportProgressEvent>("export:progress", (ev) => {
     state.exportProgress = ev.payload;
-    renderSidebar(sidebarEl, { onOpenModal: openModal });
+    renderSidebarChrome();
     if (state.activeModal === "export") {
       renderModal();
     }
@@ -677,12 +702,16 @@ async function initApp(): Promise<void> {
       openModal("setup");
     }
   } else {
-    renderSidebar(sidebarEl, { onOpenModal: openModal });
+    renderSidebarChrome();
     syncToolbar();
     renderCcBar(ccHostEl);
     scrollCtrl.syncBackButton();
     syncLoadingBanner();
     await openBookById(autoOpenBookId);
+  }
+
+  if (isPreviewAndroidMode()) {
+    window.parent?.postMessage({ type: "preview:ready" }, window.location.origin);
   }
 }
 
@@ -829,12 +858,12 @@ viewportEl.addEventListener(
   (e) => {
     if (!isAndroidPlatform() || pinchStartDist === null || e.touches.length !== 2) return;
     if (!state.activeBook || state.activeModal !== null) return;
+    if (e.cancelable) e.preventDefault();
     const dx = e.touches[0].clientX - e.touches[1].clientX;
     const dy = e.touches[0].clientY - e.touches[1].clientY;
     const dist = Math.hypot(dx, dy);
     const delta = dist - pinchLastAppliedDist;
     if (Math.abs(delta) >= 34) {
-      e.preventDefault();
       pinchLastAppliedDist = dist;
       stepPageZoom(delta > 0 ? 0.1 : -0.1);
     }
@@ -842,15 +871,13 @@ viewportEl.addEventListener(
   { passive: false },
 );
 
-viewportEl.addEventListener(
-  "touchend",
-  (e) => {
-    if (e.touches.length < 2) {
-      pinchStartDist = null;
-    }
-  },
-  { passive: true },
-);
+const clearPinch = (e: TouchEvent) => {
+  if (e.touches.length < 2) {
+    pinchStartDist = null;
+  }
+};
+viewportEl.addEventListener("touchend", clearPinch, { passive: true });
+viewportEl.addEventListener("touchcancel", clearPinch, { passive: true });
 
 function installPreviewTouchScroll(): void {
   let activeEl: HTMLElement | null = null;

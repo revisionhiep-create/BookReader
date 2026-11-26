@@ -1,6 +1,7 @@
+import { attachSheetSwipeToDismiss } from "../../android/ui/mobile_chrome";
 import { invoke } from "../tauri_bridge";
 import { Icons } from "../icons";
-import { isVoiceCloningEnabled, state } from "../state";
+import { isAndroidPlatform, isVoiceCloningEnabled, state } from "../state";
 import type { DeleteClonedVoiceResponse, Settings, VoiceInfo } from "../types";
 import { escapeAttr, escapeHtml } from "./sidebar";
 
@@ -104,7 +105,12 @@ export function renderVoicePickerModal(
     </div>
   `;
 
-  container.querySelector("#modal-backdrop")?.addEventListener("click", (e) => {
+  const backdropEl = container.querySelector<HTMLElement>("#modal-backdrop");
+  const sheetCard = container.querySelector<HTMLElement>(".mobile-sheet");
+  if (sheetCard && isAndroidPlatform()) {
+    attachSheetSwipeToDismiss(sheetCard, backdropEl, handlers.onClose);
+  }
+  backdropEl?.addEventListener("click", (e) => {
     if (e.target === e.currentTarget) handlers.onClose();
   });
   container.querySelector("#btn-modal-close")?.addEventListener("click", handlers.onClose);

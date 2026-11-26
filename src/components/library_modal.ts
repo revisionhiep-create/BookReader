@@ -15,7 +15,8 @@ function pickBookViaInput(): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".pdf,.epub,.docx,.txt,application/pdf,application/epub+zip,text/plain";
+    input.accept =
+      ".pdf,.epub,.docx,.txt,application/pdf,application/epub+zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain";
     input.style.display = "none";
     document.body.appendChild(input);
     const cleanup = () => input.remove();
@@ -30,6 +31,28 @@ function pickBookViaInput(): Promise<File | null> {
     });
     input.click();
   });
+}
+
+export async function pickAndImportBook(onStatus?: (msg: string) => void): Promise<BookMeta | null> {
+  let picked: string | string[] | null = null;
+  try {
+    picked = await openDialog({
+      multiple: false,
+      filters: [{ name: "Books", extensions: ["pdf", "epub", "docx", "txt"] }],
+    });
+  } catch {
+    const file = await pickBookViaInput();
+    if (!file) return null;
+    onStatus?.("Importing book...");
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    return invoke<BookMeta>("import_book_bytes", {
+      filename: file.name,
+      bytes,
+    });
+  }
+  if (!picked || typeof picked !== "string") return null;
+  onStatus?.("Importing book...");
+  return invoke<BookMeta>("import_book_file", { path: picked });
 }
 
 export function renderLibraryModal(container: HTMLElement, handlers: LibraryHandlers): void {
@@ -97,27 +120,7 @@ export function renderLibraryModal(container: HTMLElement, handlers: LibraryHand
   container.querySelector("#btn-import-book")?.addEventListener("click", async () => {
     let book: BookMeta | null = null;
     try {
-      let picked: string | string[] | null = null;
-      try {
-        picked = await openDialog({
-          multiple: false,
-          filters: [
-            { name: "Books", extensions: ["pdf", "epub", "docx", "txt"] },
-          ],
-        });
-      } catch {
-        const file = await pickBookViaInput();
-        if (file) {
-          const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-          book = await invoke<BookMeta>("import_book_bytes", {
-            filename: file.name,
-            bytes,
-          });
-        }
-      }
-      if (!book && picked && typeof picked === "string") {
-        book = await invoke<BookMeta>("import_book_file", { path: picked });
-      }
+      book = await pickAndImportBook();
     } catch (err) {
       handlers.onToast?.(`Import failed: ${String(err)}`);
       return;

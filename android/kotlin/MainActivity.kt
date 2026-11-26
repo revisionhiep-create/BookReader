@@ -1,22 +1,30 @@
 package com.bookreader.android
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.View
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.io.FileOutputStream
+import java.util.UUID
 
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     appContext = applicationContext
+    BookReaderPlaybackService.initAppContext(applicationContext)
     ensureNativeBound()
+    requestNotificationsPermissionIfNeeded()
 
     val bgColor = Color.parseColor("#181818")
     window.decorView.setBackgroundColor(bgColor)
@@ -44,7 +52,22 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     appContext = applicationContext
+    BookReaderPlaybackService.initAppContext(applicationContext)
     ensureNativeBound()
+  }
+
+  private fun requestNotificationsPermissionIfNeeded() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+        != PackageManager.PERMISSION_GRANTED
+      ) {
+        ActivityCompat.requestPermissions(
+          this,
+          arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+          1001
+        )
+      }
+    }
   }
 
   private fun ensureNativeBound() {
@@ -82,8 +105,16 @@ class MainActivity : TauriActivity() {
         }
       }
 
-      var cleanName = displayName?.replace(Regex("[/\\\\]"), "_")?.trim() ?: ""
-      if (cleanName.isEmpty()) {
+      var cleanName = (displayName ?: "")
+        .replace(Regex("[\\u0000-\\u001F\\u007F]"), "")
+        .replace(Regex("[/\\\\:*?\"<>|]"), "_")
+        .trim()
+      if (cleanName == "." || cleanName == "..") {
+        cleanName = ""
+      }
+
+      val supportedExt = Regex("\\.(epub|pdf|docx|txt)$", RegexOption.IGNORE_CASE)
+      if (cleanName.isEmpty() || !supportedExt.containsMatchIn(cleanName)) {
         val mime = resolver.getType(uri) ?: ""
         val ext = when {
           mime.contains("pdf") -> ".pdf"
@@ -92,25 +123,34 @@ class MainActivity : TauriActivity() {
           mime.contains("text/plain") -> ".txt"
           else -> ".epub"
         }
-        cleanName = "imported_book_${System.currentTimeMillis()}$ext"
+        cleanName = if (cleanName.isEmpty()) "imported_book$ext" else "$cleanName$ext"
       }
 
       val destDir = File(destDirPath)
       if (!destDir.exists()) {
         destDir.mkdirs()
       }
-      val outFile = File(destDir, "${System.currentTimeMillis()}_$cleanName")
+      val importDir = File(destDir, UUID.randomUUID().toString())
+      if (!importDir.exists()) {
+        importDir.mkdirs()
+      }
+      val outFile = File(importDir, cleanName)
+      val importRoot = importDir.canonicalPath + File.separator
+      if (!outFile.canonicalPath.startsWith(importRoot)) {
+        importDir.deleteRecursively()
+        throw SecurityException("Invalid imported filename: $cleanName")
+      }
 
-      resolver.openInputStream(uri)?.use { input ->
-        FileOutputStream(outFile).use { output ->
-          val buf = ByteArray(64 * 1024)
-          while (true) {
-            val read = input.read(buf)
-            if (read <= 0) break
-            output.write(buf, 0, read)
+      try {
+        resolver.openInputStream(uri)?.use { input ->
+          FileOutputStream(outFile).use { output ->
+            input.copyTo(output, 64 * 1024)
           }
-        }
-      } ?: throw IllegalStateException("Unable to open selected document stream: $uriString")
+        } ?: throw IllegalStateException("Unable to open selected document stream: $uriString")
+      } catch (t: Throwable) {
+        importDir.deleteRecursively()
+        throw t
+      }
 
       return outFile.absolutePath
     }

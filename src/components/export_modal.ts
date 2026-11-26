@@ -1,6 +1,6 @@
 import { invoke, saveDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
-import { formatDuration, state } from "../state";
+import { formatDuration, isAndroidPlatform, state } from "../state";
 import type { ExportFormat, ExportScope } from "../types";
 import { escapeHtml } from "./sidebar";
 
@@ -89,7 +89,7 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
                   </div>
                   ${prog.error ? `<div class="error-text">${escapeHtml(prog.error)}</div>` : ""}
                   ${
-                    prog.status === "completed"
+                    prog.status === "completed" && !isAndroidPlatform()
                       ? `<div style="display:flex;justify-content:flex-end;">
                            <button class="btn-secondary" id="btn-open-export-dir">Open Folder</button>
                          </div>`
@@ -139,7 +139,11 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
 
   container.querySelector("#btn-open-export-dir")?.addEventListener("click", async () => {
     if (prog?.output_path) {
-      await invoke("open_folder_in_explorer", { path: prog.output_path });
+      try {
+        await invoke("open_folder_in_explorer", { path: prog.output_path });
+      } catch (err) {
+        handlers.onToast(`Cannot open folder: ${String(err)}`);
+      }
     }
   });
 
@@ -147,13 +151,13 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
     if (!book) return;
     const ext = draftFormat;
     const safeTitle = book.title.replace(/[\\/:*?"<>|]/g, "_");
-    const outputPath = await saveDialog({
-      defaultPath: `${safeTitle}.${ext}`,
-      filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
-    });
-    if (!outputPath) return;
-
     try {
+      const outputPath = await saveDialog({
+        defaultPath: `${safeTitle}.${ext}`,
+        filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+      });
+      if (!outputPath) return;
+
       await invoke("start_audio_export", {
         req: {
           book_id: book.id,

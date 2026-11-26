@@ -234,6 +234,8 @@ export function installPreviewMock(): void {
   };
 
   let sleepTimer: SleepTimerStatus = { active: false, mode: "off", remaining_sec: null };
+  let activeBookId = book1.id;
+  let activeSentences: SentenceItem[] = sentences;
   let activeSentenceIdx = 2;
   let playing = false;
   let simTimer: number | undefined;
@@ -249,7 +251,7 @@ export function installPreviewMock(): void {
   };
 
   function wordTimelineFor(sid: number): { starts: number[]; durationMs: number; words: string[] } {
-    const text = sentences[sid]?.text ?? "";
+    const text = activeSentences[sid]?.text ?? "";
     const words = text.trim().split(/\s+/).filter(Boolean);
     const stepMs = Math.max(140, Math.round(280 / settings.speed));
     const starts = words.map((_, i) => i * stepMs);
@@ -257,18 +259,20 @@ export function installPreviewMock(): void {
   }
 
   function buildTtsState(includeTimeline = true): TtsStateEvent {
-    const tl = wordTimelineFor(activeSentenceIdx);
+    const totalSents = Math.max(1, activeSentences.length);
+    const clampedIdx = Math.max(0, Math.min(totalSents - 1, activeSentenceIdx));
+    const tl = wordTimelineFor(clampedIdx);
     return {
       status: playing ? "playing" : "paused",
-      book_id: book1.id,
-      sentence_idx: activeSentenceIdx,
+      book_id: activeBookId,
+      sentence_idx: clampedIdx,
       word_idx: Math.min(simWordIdx, Math.max(0, tl.words.length - 1)),
       playback_ms: simPlaybackMs,
       sentence_duration_ms: tl.durationMs,
       word_starts_ms: includeTimeline ? tl.starts : undefined,
-      total_sentences: sentences.length,
-      elapsed_est_sec: activeSentenceIdx * 4.2 + simPlaybackMs / 1000,
-      remaining_est_sec: Math.max(0, (sentences.length - activeSentenceIdx) * 4.2),
+      total_sentences: activeSentences.length,
+      elapsed_est_sec: clampedIdx * 4.2 + simPlaybackMs / 1000,
+      remaining_est_sec: Math.max(0, (activeSentences.length - clampedIdx) * 4.2),
       error: null,
     };
   }
@@ -282,13 +286,14 @@ export function installPreviewMock(): void {
 
   function startSim(): void {
     stopSim();
+    if (activeSentences.length === 0) return;
     emit("tts:state", buildTtsState(true));
     simTimer = window.setInterval(() => {
-      if (!playing) return;
+      if (!playing || activeSentences.length === 0) return;
       const tl = wordTimelineFor(activeSentenceIdx);
       simPlaybackMs += 100;
       if (simPlaybackMs >= tl.durationMs) {
-        activeSentenceIdx = (activeSentenceIdx + 1) % sentences.length;
+        activeSentenceIdx = (activeSentenceIdx + 1) % activeSentences.length;
         simPlaybackMs = 0;
         simWordIdx = 0;
         emit("tts:state", buildTtsState(true));
@@ -374,8 +379,18 @@ export function installPreviewMock(): void {
         case "open_book": {
           const id = String(args.bookId || book1.id);
           const found = library.find((b) => b.id === id) ?? book1;
-          activeSentenceIdx = found.current_sentence_idx;
-          return buildBookPayload(found) as T;
+          stopSim();
+          playing = false;
+          const payload = buildBookPayload(found);
+          activeBookId = found.id;
+          activeSentences = payload.sentences;
+          activeSentenceIdx = Math.max(
+            0,
+            Math.min(Math.max(0, activeSentences.length - 1), found.current_sentence_idx),
+          );
+          simPlaybackMs = 0;
+          simWordIdx = 0;
+          return payload as T;
         }
         case "update_settings": {
           settings = { ...settings, ...(args.settings as Settings) };
@@ -396,7 +411,10 @@ export function installPreviewMock(): void {
           else stopSim();
           return buildTtsState(true) as T;
         case "tts_play_from":
-          activeSentenceIdx = Number(args.sentenceIdx ?? 0);
+          activeSentenceIdx = Math.max(
+            0,
+            Math.min(Math.max(0, activeSentences.length - 1), Number(args.sentenceIdx ?? 0)),
+          );
           simPlaybackMs = 0;
           simWordIdx = 0;
           playing = true;
@@ -405,7 +423,7 @@ export function installPreviewMock(): void {
         case "tts_step_sentence":
           activeSentenceIdx = Math.max(
             0,
-            Math.min(sentences.length - 1, activeSentenceIdx + Number(args.delta ?? 0)),
+            Math.min(Math.max(0, activeSentences.length - 1), activeSentenceIdx + Number(args.delta ?? 0)),
           );
           simPlaybackMs = 0;
           simWordIdx = 0;
@@ -457,6 +475,12 @@ export function installPreviewMock(): void {
         case "delete_book": {
           const bookId = String(args.bookId || "");
           library = library.filter((b) => b.id !== bookId);
+          if (bookId === activeBookId) {
+            stopSim();
+            playing = false;
+            simPlaybackMs = 0;
+            simWordIdx = 0;
+          }
           return library as T;
         }
         case "set_sleep_timer": {

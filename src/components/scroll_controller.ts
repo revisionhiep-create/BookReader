@@ -39,7 +39,15 @@ export class ScrollController {
       },
       { passive: true },
     );
-    this.viewport.addEventListener("touchmove", markUserScroll, { passive: true });
+    this.viewport.addEventListener(
+      "touchmove",
+      (e) => {
+        if (e.touches.length === 1) {
+          markUserScroll();
+        }
+      },
+      { passive: true },
+    );
 
     // Scrollbar drag or clicking inside scrollbar gutter
     this.viewport.addEventListener("pointerdown", (e) => {
@@ -100,8 +108,9 @@ export class ScrollController {
         .getPropertyValue("--safe-bottom")
         .trim();
       const safeBottom = Number.parseFloat(safeBottomRaw) || 0;
-      const pillReserve = !dockEl && !ccVisible ? 56 : 0;
-      this.backBtn.style.bottom = `${dockHeight + ccHeight + safeBottom + pillReserve + 14}px`;
+      const bottomBase = Math.max(dockHeight, safeBottom);
+      const pillReserve = dockEl ? 0 : 54;
+      this.backBtn.style.bottom = `${bottomBase + ccHeight + pillReserve + 14}px`;
       return;
     }
 

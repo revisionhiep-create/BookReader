@@ -75,7 +75,14 @@ impl TtsController {
         let settings = storage.settings();
         let engine = Arc::new(PhononEngine::new());
         if storage.paths().model_ready() {
-            let _ = engine.ensure_loaded(storage.paths());
+            let warmup_engine = Arc::clone(&engine);
+            let warmup_storage = Arc::clone(&storage);
+            std::thread::Builder::new()
+                .name("bookreader-model-warmup".to_string())
+                .spawn(move || {
+                    let _ = warmup_engine.ensure_loaded(warmup_storage.paths());
+                })
+                .ok();
         }
 
         let audio = Arc::new(AudioOutput::start(settings.speed, settings.volume)?);
@@ -652,6 +659,8 @@ impl TtsController {
         let mut last_emitted_at = Instant::now();
         let mut last_emitted_state: Option<(String, usize, usize)> = None;
         let mut last_sent_timeline: Option<(usize, u32, usize, bool)> = None;
+        #[cfg(target_os = "android")]
+        let mut last_notified_status: Option<String> = None;
 
         loop {
             std::thread::sleep(Duration::from_millis(20));
@@ -735,6 +744,13 @@ impl TtsController {
                     preview_evt
                 };
                 let _ = app.emit("tts:state", &evt);
+                #[cfg(target_os = "android")]
+                if last_notified_status.as_deref() != Some(evt.status.as_str()) {
+                    let playing = matches!(evt.status.as_str(), "playing" | "loading");
+                    let paused = evt.status == "paused";
+                    crate::media_keys::sync_android_playback_status(playing, paused);
+                    last_notified_status = Some(evt.status.clone());
+                }
                 last_emitted_state = Some((evt.status, evt.sentence_idx, evt.word_idx));
                 last_emitted_at = Instant::now();
             }

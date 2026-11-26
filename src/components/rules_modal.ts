@@ -342,12 +342,12 @@ export function renderRulesModal(
   });
 
   container.querySelector("#btn-rules-export")?.addEventListener("click", async () => {
-    const target = await saveDialog({
-      defaultPath: isPron ? "bookreader-pronunciations.json" : "bookreader-ignore-rules.json",
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    if (!target) return;
     try {
+      const target = await saveDialog({
+        defaultPath: isPron ? "bookreader-pronunciations.json" : "bookreader-ignore-rules.json",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!target) return;
       await invoke("export_rules_json", { kind: mode, path: target });
       handlers.onToast("Rules exported");
     } catch (err) {
@@ -356,12 +356,12 @@ export function renderRulesModal(
   });
 
   container.querySelector("#btn-rules-import")?.addEventListener("click", async () => {
-    const picked = await openDialog({
-      multiple: false,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    if (!picked || typeof picked !== "string") return;
     try {
+      const picked = await openDialog({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!picked || typeof picked !== "string") return;
       const count = await invoke<number>("import_rules_json", {
         kind: mode,
         path: picked,

@@ -179,7 +179,7 @@ html[data-platform="android"] .toc-mobile-tabs {
 
   /* Viewport Bottom Clearance above CC + Player Dock */
   html[data-platform="android"] .reader-viewport {
-    padding-bottom: calc(var(--dock-height, 0px) + var(--cc-height, 0px) + var(--safe-bottom) + 64px);
+    padding-bottom: calc(max(var(--dock-height, 0px), var(--safe-bottom)) + var(--cc-height, 0px) + 64px);
     padding-left: calc(12px + var(--safe-left));
     padding-right: calc(12px + var(--safe-right));
   }
@@ -210,17 +210,24 @@ html[data-platform="android"] .toc-mobile-tabs {
   html[data-platform="android"] .cc-bar {
     left: var(--safe-left);
     right: var(--safe-right);
-    bottom: calc(var(--dock-height, 0px) + var(--safe-bottom));
+    bottom: max(var(--dock-height, 0px), var(--safe-bottom));
+    align-items: flex-start;
     min-height: 54px;
-    max-height: 114px;
+    max-height: min(36dvh, 260px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
     padding: 10px 42px 10px 14px;
     z-index: 27;
   }
 
   html[data-platform="android"] .cc-text {
+    margin: auto 0;
+    width: 100%;
     max-width: 100%;
-    font-size: clamp(15px, var(--mobile-cc-size, 19px), 26px) !important;
-    line-height: 1.4;
+    font-size: clamp(14px, var(--mobile-cc-size, 19px), 48px);
+    line-height: 1.38;
   }
 
   html[data-platform="android"] .cc-close {
@@ -373,7 +380,7 @@ html[data-platform="android"] .toc-mobile-tabs {
   html[data-platform="android"] .toast {
     left: 14px;
     right: 14px;
-    bottom: calc(var(--dock-height, 0px) + var(--cc-height, 0px) + var(--safe-bottom) + 14px);
+    bottom: calc(max(var(--dock-height, 0px), var(--safe-bottom)) + var(--cc-height, 0px) + 14px);
     text-align: center;
   }
 
@@ -478,7 +485,7 @@ html[data-platform="android"] .toc-mobile-tabs {
    ========================================================================== */
 @media (max-width: 599px) {
   html[data-platform="android"] .reader-viewport {
-    padding: 8px var(--safe-right) calc(var(--dock-height, 0px) + var(--cc-height, 0px) + var(--safe-bottom) + 64px) var(--safe-left);
+    padding: 8px var(--safe-right) calc(max(var(--dock-height, 0px), var(--safe-bottom)) + var(--cc-height, 0px) + 64px) var(--safe-left);
   }
 
   html[data-platform="android"] .br-prose {
@@ -492,12 +499,24 @@ html[data-platform="android"] .toc-mobile-tabs {
 
   html[data-platform="android"] .sheet-handle {
     display: block;
-    width: 38px;
+    position: relative;
+    width: 44px;
     height: 4px;
     border-radius: 999px;
     background: var(--border-strong);
-    margin: 9px auto 2px;
+    margin: 10px auto 4px;
     flex-shrink: 0;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  html[data-platform="android"] .sheet-handle::before {
+    content: "";
+    position: absolute;
+    left: -36px;
+    right: -36px;
+    top: -12px;
+    bottom: -12px;
   }
 
   /* Hybrid Bottom Sheets (Voice Picker, Quick Reader, Speed, Sleep) */
@@ -516,6 +535,12 @@ html[data-platform="android"] .toc-mobile-tabs {
     border-right: none;
     border-bottom: none;
     padding-bottom: var(--safe-bottom);
+    will-change: transform;
+  }
+
+  html[data-platform="android"] .modal-card.mobile-sheet .modal-header {
+    touch-action: none;
+    cursor: grab;
   }
 
   /* Hybrid Full-Screen Pages (Settings, Library, Rules, TOC, Export, Setup) */
@@ -698,6 +723,10 @@ html[data-platform="android"] .toc-mobile-tabs {
     gap: 6px 10px;
   }
 
+  html[data-platform="android"] .rule-row.ignore-mode {
+    grid-template-columns: 1fr auto auto;
+  }
+
   html[data-platform="android"] .book-row {
     flex-wrap: wrap;
     gap: 10px;
@@ -736,6 +765,12 @@ html[data-platform="android"] .toc-mobile-tabs {
     border-radius: 18px 18px 0 0;
     border-bottom: none;
     padding-bottom: var(--safe-bottom);
+    will-change: transform;
+  }
+
+  html[data-platform="android"] .modal-card.mobile-sheet .modal-header {
+    touch-action: none;
+    cursor: grab;
   }
 
   html[data-platform="android"] .modal-card.mobile-sheet .chip-row {
@@ -748,12 +783,24 @@ html[data-platform="android"] .toc-mobile-tabs {
 
   html[data-platform="android"] .sheet-handle {
     display: block;
-    width: 38px;
+    position: relative;
+    width: 44px;
     height: 4px;
     border-radius: 999px;
     background: var(--border-strong);
-    margin: 9px auto 2px;
+    margin: 10px auto 4px;
     flex-shrink: 0;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  html[data-platform="android"] .sheet-handle::before {
+    content: "";
+    position: absolute;
+    left: -36px;
+    right: -36px;
+    top: -12px;
+    bottom: -12px;
   }
 
   html[data-platform="android"] .storage-summary-grid {
@@ -790,7 +837,7 @@ html[data-platform="android"] .toc-mobile-tabs {
 
   html[data-platform="android"] .cc-bar {
     min-height: 40px;
-    max-height: 54px;
+    max-height: min(30dvh, 110px);
     padding: 6px 38px 6px 12px;
   }
 

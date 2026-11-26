@@ -70,8 +70,8 @@ function applyActiveWord(container: HTMLElement, nextWord: number): void {
   if (nextWord >= 0 && nextWord < mountedSpans.length) {
     const nextSpan = mountedSpans[nextWord];
     nextSpan.classList.add("active");
-    if (container.scrollHeight > container.clientHeight) {
-      nextSpan.scrollIntoView({ block: "nearest", behavior: "auto" });
+    if (container.scrollHeight > container.clientHeight + 2) {
+      nextSpan.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
     }
   }
   mountedActiveWord = nextWord;

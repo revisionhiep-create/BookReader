@@ -27,10 +27,34 @@ const barEl = document.getElementById("lab-bar")!;
 const stageEl = document.getElementById("lab-stage")!;
 
 function broadcast(message: Record<string, unknown>): void {
+  const origin = window.location.origin;
   stageEl.querySelectorAll<HTMLIFrameElement>("iframe").forEach((frame) => {
-    frame.contentWindow?.postMessage(message, "*");
+    frame.contentWindow?.postMessage(message, origin);
   });
 }
+
+function syncFrameState(target: Window): void {
+  const origin = window.location.origin;
+  target.postMessage(
+    {
+      type: "preview:set-insets",
+      top: hardwareChrome ? 28 : 0,
+      bottom: hardwareChrome ? 18 : 0,
+    },
+    origin,
+  );
+  target.postMessage({ type: "preview:set-theme", theme }, origin);
+  target.postMessage({ type: "preview:toggle-cc", enabled: ccEnabled }, origin);
+  target.postMessage({ type: "preview:toggle-dock", collapsed: dockCollapsed }, origin);
+}
+
+window.addEventListener("message", (ev) => {
+  if (ev.origin !== window.location.origin) return;
+  const data = ev.data as { type?: string } | null;
+  if (data?.type === "preview:ready" && ev.source && "postMessage" in ev.source) {
+    syncFrameState(ev.source as Window);
+  }
+});
 
 function renderBar(): void {
   barEl.innerHTML = `
@@ -177,22 +201,6 @@ function renderStage(): void {
       `;
     })
     .join("");
-
-  stageEl.querySelectorAll<HTMLIFrameElement>("iframe").forEach((frame) => {
-    frame.addEventListener("load", () => {
-      window.setTimeout(() => {
-        frame.contentWindow?.postMessage(
-          {
-            type: "preview:set-insets",
-            top: hardwareChrome ? 28 : 0,
-            bottom: hardwareChrome ? 18 : 0,
-          },
-          "*",
-        );
-        frame.contentWindow?.postMessage({ type: "preview:set-theme", theme }, "*");
-      }, 150);
-    });
-  });
 }
 
 function renderAll(): void {

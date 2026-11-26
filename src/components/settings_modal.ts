@@ -13,6 +13,7 @@ export function renderSettingsModal(
   container: HTMLElement,
   handlers: SettingsModalHandlers,
 ): void {
+  const prevScrollTop = container.querySelector<HTMLElement>(".modal-body")?.scrollTop ?? 0;
   const s = state.settings;
   const p = s.pauses;
   const san = s.sanitizer;
@@ -161,6 +162,11 @@ export function renderSettingsModal(
   });
   container.querySelector("#btn-modal-close")?.addEventListener("click", handlers.onClose);
 
+  const newBody = container.querySelector<HTMLElement>(".modal-body");
+  if (newBody && prevScrollTop > 0) {
+    newBody.scrollTop = prevScrollTop;
+  }
+
   container.querySelectorAll<HTMLButtonElement>("[data-preset]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const preset = btn.dataset.preset!;
@@ -171,9 +177,17 @@ export function renderSettingsModal(
             ? { ...p, preset, sentence_ms: 550, paragraph_ms: 1050, section_ms: 1500, comma_extra_ms: 40, semicolon_extra_ms: 80 }
             : { ...p, preset: "natural", sentence_ms: 450, paragraph_ms: 850, section_ms: 1300, comma_extra_ms: 0, semicolon_extra_ms: 0 };
       await persistSettings({ pauses: nextP });
-      renderSettingsModal(container, handlers);
+      if (state.activeModal === "settings") {
+        renderSettingsModal(container, handlers);
+      }
     });
   });
+
+  const clearPresetChips = () => {
+    container.querySelectorAll<HTMLButtonElement>("[data-preset]").forEach((el) => {
+      el.classList.remove("active");
+    });
+  };
 
   const bindRange = (id: string, onChange: (val: number) => void, fmt?: (val: number) => string) => {
     const input = container.querySelector<HTMLInputElement>(id);
@@ -192,45 +206,40 @@ export function renderSettingsModal(
   bindRange(
     "#set-sent-ms",
     (v) => {
-      void persistSettings({ pauses: { ...state.settings.pauses, sentence_ms: v, preset: "custom" } }).then(() =>
-        renderSettingsModal(container, handlers),
-      );
+      clearPresetChips();
+      void persistSettings({ pauses: { ...state.settings.pauses, sentence_ms: v, preset: "custom" } });
     },
     (v) => `${Math.round(v)} ms`,
   );
   bindRange(
     "#set-para-ms",
     (v) => {
-      void persistSettings({ pauses: { ...state.settings.pauses, paragraph_ms: v, preset: "custom" } }).then(() =>
-        renderSettingsModal(container, handlers),
-      );
+      clearPresetChips();
+      void persistSettings({ pauses: { ...state.settings.pauses, paragraph_ms: v, preset: "custom" } });
     },
     (v) => `${Math.round(v)} ms`,
   );
   bindRange(
     "#set-sec-ms",
     (v) => {
-      void persistSettings({ pauses: { ...state.settings.pauses, section_ms: v, preset: "custom" } }).then(() =>
-        renderSettingsModal(container, handlers),
-      );
+      clearPresetChips();
+      void persistSettings({ pauses: { ...state.settings.pauses, section_ms: v, preset: "custom" } });
     },
     (v) => `${Math.round(v)} ms`,
   );
   bindRange(
     "#set-comma-ms",
     (v) => {
-      void persistSettings({ pauses: { ...state.settings.pauses, comma_extra_ms: v, preset: "custom" } }).then(() =>
-        renderSettingsModal(container, handlers),
-      );
+      clearPresetChips();
+      void persistSettings({ pauses: { ...state.settings.pauses, comma_extra_ms: v, preset: "custom" } });
     },
     (v) => `${Math.round(v)} ms`,
   );
   bindRange(
     "#set-semi-ms",
     (v) => {
-      void persistSettings({ pauses: { ...state.settings.pauses, semicolon_extra_ms: v, preset: "custom" } }).then(() =>
-        renderSettingsModal(container, handlers),
-      );
+      clearPresetChips();
+      void persistSettings({ pauses: { ...state.settings.pauses, semicolon_extra_ms: v, preset: "custom" } });
     },
     (v) => `${Math.round(v)} ms`,
   );
@@ -269,7 +278,6 @@ export function renderSettingsModal(
         typography: { ...state.settings.typography, font_size: Math.round(v) },
       }).then(() => {
         handlers.onTypographyChanged();
-        renderSettingsModal(container, handlers);
       });
     },
     (v) => `${Math.round(v)} px`,
@@ -281,7 +289,6 @@ export function renderSettingsModal(
         typography: { ...state.settings.typography, line_height: v },
       }).then(() => {
         handlers.onTypographyChanged();
-        renderSettingsModal(container, handlers);
       });
     },
     (v) => v.toFixed(2),
@@ -291,8 +298,6 @@ export function renderSettingsModal(
     (v) => {
       void persistSettings({
         typography: { ...state.settings.typography, cc_font_size: Math.round(v) },
-      }).then(() => {
-        renderSettingsModal(container, handlers);
       });
     },
     (v) => `${Math.round(v)} px`,

@@ -51,6 +51,9 @@ export class PdfViewer {
   private renderedPages: Set<number> = new Set();
   private renderingPages: Set<number> = new Set();
   private observer: IntersectionObserver | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private lastViewportWidth = 0;
+  private resizeTimer: number | undefined;
   private sentenceRects: RectNorm[][] = [];
   private pageSentences: Map<number, number[]> = new Map();
   private activeSid = -1;
@@ -83,9 +86,16 @@ export class PdfViewer {
       window.clearTimeout(this.zoomTimer);
       this.zoomTimer = undefined;
     }
+    if (this.resizeTimer !== undefined) {
+      window.clearTimeout(this.resizeTimer);
+      this.resizeTimer = undefined;
+    }
     this.cancelActiveRenders();
     this.observer?.disconnect();
     this.observer = null;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.lastViewportWidth = 0;
     void this.pdfDoc?.cleanup();
     void this.loadingTask?.destroy();
     this.pdfDoc = null;
@@ -165,6 +175,24 @@ export class PdfViewer {
     if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
     this.syncHighlight(extracted.newCursor);
     this.refreshVisibleHitLayers(extracted.newCursor);
+
+    this.lastViewportWidth = this.viewport.clientWidth;
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver?.disconnect();
+      this.resizeObserver = new ResizeObserver(() => {
+        if (!isAndroidPlatform() || !this.pdfDoc || mountGen !== this.renderGeneration) return;
+        const w = this.viewport.clientWidth;
+        if (w <= 32 || Math.abs(w - this.lastViewportWidth) <= 2) return;
+        this.lastViewportWidth = w;
+        if (this.resizeTimer !== undefined) window.clearTimeout(this.resizeTimer);
+        this.resizeTimer = window.setTimeout(() => {
+          if (mountGen === this.renderGeneration && this.pdfDoc) {
+            this.rebuildForZoom();
+          }
+        }, 120);
+      });
+      this.resizeObserver.observe(this.viewport);
+    }
   }
 
   private getPageScale(baseWidth: number): number {

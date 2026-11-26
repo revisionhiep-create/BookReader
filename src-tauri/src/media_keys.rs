@@ -132,10 +132,11 @@ mod android_jni {
 
     static JVM: OnceLock<jni::JavaVM> = OnceLock::new();
     static MAIN_ACTIVITY_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+    static PLAYBACK_SERVICE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_bookreader_android_MainActivity_nativeBindApp(
-        env: JNIEnv,
+        mut env: JNIEnv,
         class: JClass,
         _activity: JObject,
     ) {
@@ -144,6 +145,18 @@ mod android_jni {
         }
         if let Ok(global_cls) = env.new_global_ref(class) {
             let _ = MAIN_ACTIVITY_CLASS.set(global_cls);
+        }
+        if PLAYBACK_SERVICE_CLASS.get().is_none() {
+            match env.find_class("com/bookreader/android/BookReaderPlaybackService") {
+                Ok(svc_cls) => {
+                    if let Ok(global_svc) = env.new_global_ref(svc_cls) {
+                        let _ = PLAYBACK_SERVICE_CLASS.set(global_svc);
+                    }
+                }
+                Err(_) => {
+                    let _ = env.exception_clear();
+                }
+            }
         }
     }
 
@@ -201,10 +214,13 @@ mod android_jni {
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_bookreader_android_BookReaderPlaybackService_nativeBindJvm(
         env: JNIEnv,
-        _class: JClass,
+        class: JClass,
     ) {
         if let Ok(vm) = env.get_java_vm() {
             let _ = JVM.set(vm);
+        }
+        if let Ok(global_cls) = env.new_global_ref(class) {
+            let _ = PLAYBACK_SERVICE_CLASS.set(global_cls);
         }
     }
 
@@ -225,6 +241,28 @@ mod android_jni {
             4 => tts.step_sentence(-1),
             _ => {}
         }
+        if matches!(action, 0 | 1 | 2) {
+            let evt = tts.current_state_event();
+            super::sync_android_playback_status(
+                matches!(evt.status.as_str(), "playing" | "loading"),
+                evt.status == "paused",
+            );
+        }
+    }
+
+    fn playback_service_class<'local>(env: &mut JNIEnv<'local>) -> Option<JClass<'local>> {
+        if let Some(cls_ref) = PLAYBACK_SERVICE_CLASS.get() {
+            if let Ok(local) = env.new_local_ref(cls_ref.as_obj()) {
+                return Some(JClass::from(local));
+            }
+        }
+        match env.find_class("com/bookreader/android/BookReaderPlaybackService") {
+            Ok(cls) => Some(cls),
+            Err(_) => {
+                let _ = env.exception_clear();
+                None
+            }
+        }
     }
 
     pub fn notify_playback_state(title: &str, playing: bool, paused: bool) {
@@ -234,8 +272,7 @@ mod android_jni {
         let Ok(mut env) = vm.attach_current_thread() else {
             return;
         };
-        let Ok(cls) = env.find_class("com/bookreader/android/BookReaderPlaybackService") else {
-            let _ = env.exception_clear();
+        let Some(cls) = playback_service_class(&mut env) else {
             return;
         };
         let Ok(jtitle) = env.new_string(title) else {
@@ -263,8 +300,7 @@ mod android_jni {
         let Ok(mut env) = vm.attach_current_thread() else {
             return;
         };
-        let Ok(cls) = env.find_class("com/bookreader/android/BookReaderPlaybackService") else {
-            let _ = env.exception_clear();
+        let Some(cls) = playback_service_class(&mut env) else {
             return;
         };
         let _ = env.call_static_method(
@@ -277,6 +313,19 @@ mod android_jni {
             let _ = env.exception_clear();
         }
     }
+}
+
+#[cfg(target_os = "android")]
+pub fn sync_android_playback_status(playing: bool, paused: bool) {
+    let title = {
+        let guard = ANDROID_LAST_TITLE.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_empty() {
+            "BookReader".to_string()
+        } else {
+            guard.clone()
+        }
+    };
+    android_jni::notify_playback_state(&title, playing, paused);
 }
 
 #[cfg(target_os = "android")]
