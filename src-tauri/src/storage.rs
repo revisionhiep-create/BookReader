@@ -35,7 +35,8 @@ impl Storage {
         let pronunciations: Vec<PronunciationRule> =
             load_or_init(&paths.pronunciations_file(), Vec::new)?;
         let ignore_rules: Vec<IgnoreRule> = load_or_init(&paths.ignore_rules_file(), Vec::new)?;
-        let library: Vec<BookMeta> = load_or_init(&paths.library_file(), Vec::new)?;
+        let mut library: Vec<BookMeta> = load_or_init(&paths.library_file(), Vec::new)?;
+        sort_library_mru(&mut library);
         let cloned_voices: Vec<ClonedVoiceMeta> =
             load_or_init(&paths.cloned_voices_file(), Vec::new)?;
         let window_state: Option<WindowState> = load_optional(&paths.window_state_file())?;
@@ -155,11 +156,9 @@ impl Storage {
 
     pub fn upsert_book(&self, book: BookMeta) -> Result<BookMeta, String> {
         let mut guard = self.data.write().unwrap();
-        if let Some(existing) = guard.library.iter_mut().find(|b| b.id == book.id) {
-            *existing = book.clone();
-        } else {
-            guard.library.insert(0, book.clone());
-        }
+        guard.library.retain(|b| b.id != book.id);
+        guard.library.insert(0, book.clone());
+        sort_library_mru(&mut guard.library);
         write_atomic(&self.paths.library_file(), &guard.library)?;
         Ok(book)
     }
@@ -174,23 +173,31 @@ impl Storage {
         total_words: Option<usize>,
     ) -> Result<(), String> {
         let mut guard = self.data.write().unwrap();
-        let Some(book) = guard.library.iter_mut().find(|b| b.id == book_id) else {
+        let Some(pos) = guard.library.iter().position(|b| b.id == book_id) else {
             return Ok(());
         };
-        book.current_sentence_idx = sentence_idx;
-        if let Some(p) = page {
-            book.current_page = p;
+        {
+            let book = &mut guard.library[pos];
+            book.current_sentence_idx = sentence_idx;
+            if let Some(p) = page {
+                book.current_page = p;
+            }
+            if let Some(y) = scroll_y {
+                book.scroll_y = y;
+            }
+            if let Some(ts) = total_sentences {
+                book.total_sentences = ts;
+            }
+            if let Some(tw) = total_words {
+                book.total_words = tw;
+            }
+            book.last_opened_at = now_unix_secs();
         }
-        if let Some(y) = scroll_y {
-            book.scroll_y = y;
+        if pos > 0 {
+            let book = guard.library.remove(pos);
+            guard.library.insert(0, book);
         }
-        if let Some(ts) = total_sentences {
-            book.total_sentences = ts;
-        }
-        if let Some(tw) = total_words {
-            book.total_words = tw;
-        }
-        book.last_opened_at = now_unix_secs();
+        sort_library_mru(&mut guard.library);
         write_atomic(&self.paths.library_file(), &guard.library)
     }
 
@@ -250,6 +257,18 @@ impl Storage {
         }
         Ok(removed_file)
     }
+}
+
+fn sort_library_mru(library: &mut [BookMeta]) {
+    library.sort_by(|a, b| {
+        b.last_opened_at.cmp(&a.last_opened_at).then_with(|| {
+            if a.last_opened_at == 0 && b.last_opened_at == 0 {
+                b.added_at.cmp(&a.added_at)
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+    });
 }
 
 pub fn now_unix_secs() -> u64 {
@@ -400,6 +419,67 @@ mod tests {
         assert_eq!(reloaded.cloned_voices(), vec![cv]);
         assert_eq!(reloaded.ignore_rules().len(), 1);
         assert_eq!(reloaded.ignore_rules()[0].pattern, "[SFX]");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn library_sorts_by_most_recently_opened_and_promotes_on_reopen() {
+        let root = std::env::temp_dir().join(format!("bookreader_mru_test_{}", uuid::Uuid::new_v4()));
+        let paths = AppPaths::from_roots(root.join("appdata"), root.join("data")).unwrap();
+
+        let make_book = |id: &str, added_at: u64, last_opened_at: u64| BookMeta {
+            id: id.to_string(),
+            title: id.to_string(),
+            format: crate::models::BookFormat::Txt,
+            stored_filename: format!("{id}.txt"),
+            original_filename: format!("{id}.txt"),
+            added_at,
+            last_opened_at,
+            current_sentence_idx: 0,
+            current_page: 1,
+            scroll_y: 0.0,
+            total_sentences: 10,
+            total_words: 100,
+            pdf_header_ignore_pct: 0.06,
+            pdf_footer_ignore_pct: 0.06,
+            bookmarks: Vec::new(),
+        };
+
+        // Seed unsorted library on disk before Storage::load
+        write_atomic(
+            &paths.library_file(),
+            &vec![
+                make_book("oldest", 100, 100),
+                make_book("newest", 300, 300),
+                make_book("middle", 200, 200),
+                make_book("never_b", 50, 0),
+                make_book("never_a", 75, 0),
+            ],
+        )
+        .unwrap();
+
+        let store = Storage::load(paths.clone()).unwrap();
+        let initial_ids: Vec<String> = store.library().into_iter().map(|b| b.id).collect();
+        assert_eq!(
+            initial_ids,
+            vec!["newest", "middle", "oldest", "never_a", "never_b"]
+        );
+
+        // Re-opening an older book with the same timestamp as "newest" promotes it to index 0
+        let mut reopened = store.get_book("oldest").unwrap();
+        reopened.last_opened_at = 300;
+        store.upsert_book(reopened).unwrap();
+        let after_same_sec: Vec<String> = store.library().into_iter().map(|b| b.id).collect();
+        assert_eq!(after_same_sec[0], "oldest");
+
+        // Updating progress on an older book promotes it to the top and persists across reload
+        store
+            .update_book_progress("middle", 4, None, None, None, None)
+            .unwrap();
+        let reloaded = Storage::load(paths).unwrap();
+        let after_progress: Vec<String> = reloaded.library().into_iter().map(|b| b.id).collect();
+        assert_eq!(after_progress[0], "middle");
 
         let _ = fs::remove_dir_all(root);
     }

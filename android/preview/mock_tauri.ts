@@ -416,14 +416,19 @@ export function installPreviewMock(): void {
         case "open_book": {
           const id = String(args.bookId || book1.id);
           const found = library.find((b) => b.id === id) ?? book1;
+          const opened: BookMeta = {
+            ...found,
+            last_opened_at: Math.floor(Date.now() / 1000),
+          };
+          library = [opened, ...library.filter((b) => b.id !== opened.id)];
           stopSim();
           playing = false;
-          const payload = buildBookPayload(found);
-          activeBookId = found.id;
+          const payload = buildBookPayload(opened);
+          activeBookId = opened.id;
           activeSentences = payload.sentences;
           activeSentenceIdx = Math.max(
             0,
-            Math.min(Math.max(0, activeSentences.length - 1), found.current_sentence_idx),
+            Math.min(Math.max(0, activeSentences.length - 1), opened.current_sentence_idx),
           );
           simPlaybackMs = 0;
           simWordIdx = 0;

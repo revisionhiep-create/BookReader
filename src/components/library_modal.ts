@@ -17,6 +17,18 @@ export function resetLibrarySearch(): void {
   librarySearchQuery = "";
 }
 
+export function sortLibraryByRecent(books: BookMeta[]): BookMeta[] {
+  return [...books].sort((a, b) => {
+    const aOpened = a.last_opened_at || 0;
+    const bOpened = b.last_opened_at || 0;
+    if (bOpened !== aOpened) return bOpened - aOpened;
+    if (aOpened === 0 && bOpened === 0) {
+      return (b.added_at || 0) - (a.added_at || 0);
+    }
+    return 0;
+  });
+}
+
 export function filterLibraryBooks(books: BookMeta[], query: string): BookMeta[] {
   const q = query.trim().toLowerCase();
   if (!q) return books;
@@ -83,7 +95,8 @@ function renderLibraryList(container: HTMLElement, handlers: LibraryHandlers): v
 
   const total = state.library.length;
   const trimmedQuery = librarySearchQuery.trim();
-  const filtered = filterLibraryBooks(state.library, librarySearchQuery);
+  const ordered = sortLibraryByRecent(state.library);
+  const filtered = filterLibraryBooks(ordered, librarySearchQuery);
 
   if (countLabel) {
     const noun = `book${total === 1 ? "" : "s"}`;

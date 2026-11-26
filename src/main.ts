@@ -10,7 +10,12 @@ import {
 import { invoke, listen } from "./tauri_bridge";
 import { renderCcBar, resetCcClockForSeek, syncCcPlaybackClock } from "./components/cc_bar";
 import { renderExportModal } from "./components/export_modal";
-import { pickAndImportBook, renderLibraryModal, resetLibrarySearch } from "./components/library_modal";
+import {
+  pickAndImportBook,
+  renderLibraryModal,
+  resetLibrarySearch,
+  sortLibraryByRecent,
+} from "./components/library_modal";
 import { PdfViewer } from "./components/pdf_viewer";
 import { RichViewer } from "./components/rich_viewer";
 import { resetRulesModalDraft, renderRulesModal } from "./components/rules_modal";
@@ -309,9 +314,10 @@ async function openBookById(bookId: string): Promise<void> {
 
     const payload = await invoke<DocumentPayload>("open_book", { bookId });
     state.activeBook = payload.book;
-    state.library = state.library.map((b) =>
-      b.id === payload.book.id ? payload.book : b,
-    );
+    state.library = [
+      payload.book,
+      ...state.library.filter((b) => b.id !== payload.book.id),
+    ];
     scrollCtrl.resetForNewBook();
 
     if (payload.book.format === "pdf") {
@@ -737,7 +743,7 @@ async function initApp(): Promise<void> {
 
   state.bootstrap = boot;
   state.settings = boot.settings;
-  state.library = boot.library;
+  state.library = sortLibraryByRecent(boot.library);
   state.pronunciations = boot.pronunciations;
   state.ignoreRules = boot.ignore_rules;
   state.voices = boot.voices;
