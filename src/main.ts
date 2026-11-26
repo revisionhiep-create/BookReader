@@ -196,6 +196,8 @@ function closeModal(): void {
 }
 
 let ttsActionInFlight = false;
+let seekRequestSeq = 0;
+let pendingSeekTarget: number | null = null;
 
 async function runTtsAction<T>(
   busyHint: string | null,
@@ -225,22 +227,46 @@ async function runTtsAction<T>(
 async function jumpAndPlay(sentenceIdx: number): Promise<void> {
   if (!state.activeBook || state.sentences.length === 0) return;
   const clamped = Math.max(0, Math.min(sentenceIdx, state.sentences.length - 1));
+  const mySeq = ++seekRequestSeq;
+  pendingSeekTarget = clamped;
   state.autoScrollEnabled = true;
-  state.tts.sentence_idx = clamped;
+  state.tts = {
+    ...state.tts,
+    status: "loading",
+    sentence_idx: clamped,
+    word_idx: 0,
+    playback_ms: 0,
+    sentence_duration_ms: 0,
+    word_starts_ms: undefined,
+    error: null,
+  };
+  syncLoadingBanner();
   syncActiveHighlight();
   scrollCtrl.onActiveSentenceChanged(clamped, true);
   resetCcClockForSeek();
-  const res = await runTtsAction("Waking audio engine and preparing speech...", async () => {
-    try {
-      return await invoke<TtsStateEvent>("tts_play_from", { sentenceIdx: clamped });
-    } catch (err) {
-      showToast(String(err));
-      return null;
-    }
-  });
-  if (res) {
+  renderChrome();
+
+  try {
+    const res = await invoke<TtsStateEvent>("tts_play_from", { sentenceIdx: clamped });
+    if (mySeq !== seekRequestSeq) return;
+    pendingSeekTarget = null;
     state.tts = res;
     syncCcPlaybackClock(state.tts, ccHostEl);
+    syncLoadingBanner();
+    syncActiveHighlight();
+    renderChrome();
+  } catch (err) {
+    if (mySeq !== seekRequestSeq) return;
+    pendingSeekTarget = null;
+    showToast(String(err));
+    try {
+      state.tts = await invoke<TtsStateEvent>("get_tts_state");
+    } catch {
+      state.tts = { ...state.tts, status: "paused" };
+    }
+    syncCcPlaybackClock(state.tts, ccHostEl);
+    syncLoadingBanner();
+    syncActiveHighlight();
     renderChrome();
   }
 }
@@ -450,6 +476,8 @@ function getPlaybackActions() {
   return {
     onOpenModal: openModal,
     onTogglePlay: () => {
+      pendingSeekTarget = null;
+      seekRequestSeq++;
       const willStart =
         state.tts.status !== "playing" && state.tts.status !== "loading";
       void (async () => {
@@ -721,6 +749,9 @@ async function initApp(): Promise<void> {
   );
 
   await listen<TtsStateEvent>("tts:state", (ev) => {
+    if (pendingSeekTarget !== null && ev.payload.sentence_idx !== pendingSeekTarget) {
+      return;
+    }
     const prevSid = state.tts.sentence_idx;
     const prevWord = state.tts.word_idx;
     const prevStatus = state.tts.status;
@@ -939,6 +970,8 @@ window.addEventListener("keydown", (e) => {
 
   if (e.code === "Space") {
     e.preventDefault();
+    pendingSeekTarget = null;
+    seekRequestSeq++;
     const willStart =
       state.tts.status !== "playing" && state.tts.status !== "loading";
     void (async () => {

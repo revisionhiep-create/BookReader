@@ -157,8 +157,8 @@ impl TtsController {
     /// Pauses playback, clears queued audio, and bumps generation (used when required model assets change).
     pub fn pause_and_flush(&self) {
         self.audio.set_paused(true);
-        self.audio.flush_and_bump_generation();
         let mut s = self.session.write().unwrap();
+        self.audio.flush_and_bump_generation();
         s.highest_enqueued_idx = None;
         s.in_flight_indices.clear();
         s.preview_active = false;
@@ -204,8 +204,8 @@ impl TtsController {
             self.play_from(cur);
         } else if is_paused {
             // Clear buffered audio while paused so pressing Resume re-synthesizes with updated voice/rules
-            self.audio.flush_and_bump_generation();
             let mut s = self.session.write().unwrap();
+            self.audio.flush_and_bump_generation();
             s.highest_enqueued_idx = None;
             s.in_flight_indices.clear();
         }
@@ -281,12 +281,14 @@ impl TtsController {
             return;
         }
 
-        self.audio.flush_and_bump_generation();
-        self.audio.set_paused(false);
-
         {
             let mut s = self.session.write().unwrap();
-            s.cursor_idx = sentence_idx.min(total - 1);
+            if s.sentences.is_empty() {
+                return;
+            }
+            self.audio.flush_and_bump_generation();
+            self.audio.set_paused(false);
+            s.cursor_idx = sentence_idx.min(s.sentences.len() - 1);
             s.highest_enqueued_idx = None;
             s.in_flight_indices.clear();
             s.preview_active = false;
@@ -355,8 +357,8 @@ impl TtsController {
 
     pub fn stop(&self) {
         self.audio.set_paused(true);
-        self.audio.flush_and_bump_generation();
         let mut s = self.session.write().unwrap();
+        self.audio.flush_and_bump_generation();
         s.highest_enqueued_idx = None;
         s.in_flight_indices.clear();
         s.preview_active = false;
@@ -391,8 +393,8 @@ impl TtsController {
         if was_active {
             self.play_from(target_idx);
         } else {
-            self.audio.flush_and_bump_generation();
             let mut s = self.session.write().unwrap();
+            self.audio.flush_and_bump_generation();
             s.cursor_idx = target_idx;
             s.highest_enqueued_idx = None;
             s.in_flight_indices.clear();
@@ -420,46 +422,9 @@ impl TtsController {
 
     fn build_state_event(&self, snap: &AudioSnapshot, include_timings: bool) -> TtsStateEvent {
         let s = self.session.read().unwrap();
+        let current_generation = self.audio.generation();
         let speed = self.audio.current_speed().max(0.5);
-        let total_sentences = s.sentences.len();
-        let active_idx = if !snap.is_preview {
-            snap.sentence_idx.unwrap_or(s.cursor_idx)
-        } else {
-            s.cursor_idx
-        };
-
-        let (elapsed_est_sec, remaining_est_sec) =
-            estimate_times(&s.cum_words, active_idx, total_sentences, speed);
-
-        let (status, error) = match &s.transport {
-            TransportState::Idle => ("idle".to_string(), None),
-            TransportState::Loading => ("loading".to_string(), None),
-            TransportState::Playing => ("playing".to_string(), None),
-            TransportState::Paused => ("paused".to_string(), None),
-            TransportState::Error(msg) => ("error".to_string(), Some(msg.clone())),
-        };
-
-        let (playback_ms, sentence_duration_ms, word_starts_ms) = if snap.is_preview {
-            (0, 0, None)
-        } else {
-            let starts = (include_timings && !snap.word_starts_ms.is_empty())
-                .then(|| (*snap.word_starts_ms).clone());
-            (snap.playback_ms, snap.sentence_duration_ms, starts)
-        };
-
-        TtsStateEvent {
-            status,
-            book_id: s.book_id.clone(),
-            sentence_idx: active_idx,
-            word_idx: if snap.is_preview { 0 } else { snap.word_idx },
-            playback_ms,
-            sentence_duration_ms,
-            word_starts_ms,
-            total_sentences,
-            elapsed_est_sec,
-            remaining_est_sec,
-            error,
-        }
+        build_state_event_inner(snap, current_generation, &s, speed, include_timings)
     }
 
     /// Synthesizes and plays a short spoken preview (used by Pronunciation `▶` & Voice Picker).
@@ -631,8 +596,6 @@ impl TtsController {
 
             // Check if generation was cancelled while synthesizing
             if generation != self.audio.generation() {
-                let mut s = self.session.write().unwrap();
-                s.in_flight_indices.remove(&idx);
                 continue;
             }
 
@@ -641,6 +604,9 @@ impl TtsController {
                     self.audio
                         .enqueue_speech(generation, idx, false, pcm, pause_ms, timings);
                     let mut s = self.session.write().unwrap();
+                    if generation != self.audio.generation() {
+                        continue;
+                    }
                     s.in_flight_indices.remove(&idx);
                     s.highest_enqueued_idx = Some(
                         s.highest_enqueued_idx
@@ -652,8 +618,11 @@ impl TtsController {
                     }
                 }
                 Err(err) => {
-                    self.audio.set_paused(true);
                     let mut s = self.session.write().unwrap();
+                    if generation != self.audio.generation() {
+                        continue;
+                    }
+                    self.audio.set_paused(true);
                     s.in_flight_indices.remove(&idx);
                     s.transport = TransportState::Error(err);
                 }
@@ -707,6 +676,9 @@ impl TtsController {
 
             {
                 let mut s = self.session.write().unwrap();
+                if snap.generation != self.audio.generation() {
+                    continue;
+                }
 
                 // Detect when a preview finishes
                 if s.preview_active && !snap.has_audio {
@@ -840,6 +812,60 @@ impl TtsController {
     }
 }
 
+fn build_state_event_inner(
+    snap: &AudioSnapshot,
+    current_generation: u64,
+    s: &SessionState,
+    speed: f32,
+    include_timings: bool,
+) -> TtsStateEvent {
+    let total_sentences = s.sentences.len();
+    let snap_valid = snap.generation == current_generation && !snap.is_preview;
+    let active_idx = if snap_valid {
+        snap.sentence_idx.unwrap_or(s.cursor_idx)
+    } else {
+        s.cursor_idx
+    };
+
+    let (elapsed_est_sec, remaining_est_sec) =
+        estimate_times(&s.cum_words, active_idx, total_sentences, speed);
+
+    let (status, error) = match &s.transport {
+        TransportState::Idle => ("idle".to_string(), None),
+        TransportState::Loading => ("loading".to_string(), None),
+        TransportState::Playing => ("playing".to_string(), None),
+        TransportState::Paused => ("paused".to_string(), None),
+        TransportState::Error(msg) => ("error".to_string(), Some(msg.clone())),
+    };
+
+    let (playback_ms, sentence_duration_ms, word_starts_ms, word_idx) = if !snap_valid {
+        (0, 0, None, 0)
+    } else {
+        let starts = (include_timings && !snap.word_starts_ms.is_empty())
+            .then(|| (*snap.word_starts_ms).clone());
+        (
+            snap.playback_ms,
+            snap.sentence_duration_ms,
+            starts,
+            snap.word_idx,
+        )
+    };
+
+    TtsStateEvent {
+        status,
+        book_id: s.book_id.clone(),
+        sentence_idx: active_idx,
+        word_idx,
+        playback_ms,
+        sentence_duration_ms,
+        word_starts_ms,
+        total_sentences,
+        elapsed_est_sec,
+        remaining_est_sec,
+        error,
+    }
+}
+
 fn prefetch_target_for_voice(voice_id: &str) -> usize {
     if AppPaths::is_cloned_voice_id(voice_id) {
         4
@@ -870,4 +896,48 @@ pub fn estimate_times(
     let elapsed = done_words / wps + (idx as f64) * pause_per_sent;
     let remaining = rem_words / wps + ((total_sentences - idx) as f64) * pause_per_sent;
     (elapsed, remaining)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_generation_snapshot_does_not_override_new_seek_cursor_or_timings() {
+        let mut s = SessionState::new();
+        s.book_id = Some("book-1".to_string());
+        s.cursor_idx = 42;
+        s.transport = TransportState::Loading;
+
+        let stale_snap = AudioSnapshot {
+            generation: 1,
+            sentence_idx: Some(10),
+            word_idx: 3,
+            playback_ms: 500,
+            sentence_duration_ms: 1200,
+            word_starts_ms: Arc::new(vec![0, 100, 250]),
+            is_preview: false,
+            has_audio: true,
+            queued_count: 1,
+            finished_natural: false,
+        };
+
+        let evt_stale = build_state_event_inner(&stale_snap, 2, &s, 1.0, true);
+        assert_eq!(evt_stale.status, "loading");
+        assert_eq!(evt_stale.sentence_idx, 42);
+        assert_eq!(evt_stale.word_idx, 0);
+        assert_eq!(evt_stale.playback_ms, 0);
+        assert_eq!(evt_stale.sentence_duration_ms, 0);
+        assert!(evt_stale.word_starts_ms.is_none());
+
+        let fresh_snap = AudioSnapshot {
+            generation: 2,
+            ..stale_snap
+        };
+        let evt_fresh = build_state_event_inner(&fresh_snap, 2, &s, 1.0, true);
+        assert_eq!(evt_fresh.sentence_idx, 10);
+        assert_eq!(evt_fresh.word_idx, 3);
+        assert_eq!(evt_fresh.playback_ms, 500);
+        assert_eq!(evt_fresh.word_starts_ms.as_deref(), Some(&[0, 100, 250][..]));
+    }
 }

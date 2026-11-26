@@ -255,6 +255,7 @@ impl QueueState {
 
 #[derive(Clone, Debug)]
 pub struct AudioSnapshot {
+    pub generation: u64,
     pub sentence_idx: Option<usize>,
     pub word_idx: usize,
     pub playback_ms: u32,
@@ -495,9 +496,18 @@ impl AudioOutput {
     pub fn snapshot(&self) -> AudioSnapshot {
         let paused = self.shared.paused.load(Ordering::Acquire);
         let mut guard = self.shared.state.lock().unwrap();
-        let heard_pos = guard.current_heard_pos_24k(paused, Instant::now());
+        let generation = self.shared.generation.load(Ordering::Acquire);
+        let active_matches_gen = guard
+            .active
+            .as_ref()
+            .is_some_and(|seg| seg.generation == generation);
+        let heard_pos = if active_matches_gen {
+            guard.current_heard_pos_24k(paused, Instant::now())
+        } else {
+            0.0
+        };
         let (sentence_idx, word_idx, playback_ms, sentence_duration_ms, word_starts_ms, is_preview, has_audio) =
-            match guard.active.as_ref() {
+            match guard.active.as_ref().filter(|seg| seg.generation == generation) {
                 Some(seg) => (
                     Some(seg.sentence_idx),
                     seg.current_word_idx_at(heard_pos),
@@ -511,7 +521,13 @@ impl AudioOutput {
                 ),
                 None => (None, 0, 0, 0, Arc::new(Vec::new()), false, false),
             };
+        let queued_count = guard
+            .queue
+            .iter()
+            .filter(|seg| seg.generation == generation)
+            .count();
         AudioSnapshot {
+            generation,
             sentence_idx,
             word_idx,
             playback_ms,
@@ -519,7 +535,7 @@ impl AudioOutput {
             word_starts_ms,
             is_preview,
             has_audio,
-            queued_count: guard.queue.len(),
+            queued_count,
             finished_natural: guard.finished_natural,
         }
     }
@@ -783,12 +799,14 @@ mod tests {
         out.enqueue_speech(g1, 1, false, vec![0.1; 1000], 200, Vec::new());
 
         let snap_before = out.snapshot();
+        assert_eq!(snap_before.generation, g1);
         assert!(snap_before.has_audio);
         assert_eq!(snap_before.queued_count, 1);
 
         let g2 = out.flush_and_bump_generation();
         assert!(g2 > g1);
         let snap_after = out.snapshot();
+        assert_eq!(snap_after.generation, g2);
         assert!(!snap_after.has_audio);
         assert_eq!(snap_after.queued_count, 0);
 

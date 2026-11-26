@@ -58,6 +58,10 @@ export class PdfViewer {
   private sentenceRects: RectNorm[][] = [];
   private extractedSentences: SentenceItem[] = [];
   private pageSentences: Map<number, number[]> = new Map();
+  private pageRectEls: Map<number, Array<{ sid: number; el: HTMLElement; isFirst: boolean }>> =
+    new Map();
+  private reflowSentElements: Map<number, HTMLElement> = new Map();
+  private reflowHighlightedSearchEls: Set<HTMLElement> = new Set();
   private reflowActive = false;
   private activeSid = -1;
   private prevSearchFocusedSid: number | null = null;
@@ -108,6 +112,9 @@ export class PdfViewer {
     this.sentenceRects = [];
     this.extractedSentences = [];
     this.pageSentences.clear();
+    this.pageRectEls.clear();
+    this.reflowSentElements.clear();
+    this.reflowHighlightedSearchEls.clear();
     this.reflowActive = false;
     this.basePageDimensions = [];
     this.activeSid = -1;
@@ -250,6 +257,9 @@ export class PdfViewer {
     this.observer?.disconnect();
     this.observer = null;
     this.pageWraps.clear();
+    this.pageRectEls.clear();
+    this.reflowSentElements.clear();
+    this.reflowHighlightedSearchEls.clear();
     this.container.innerHTML = "";
 
     const article = document.createElement("article");
@@ -308,6 +318,13 @@ export class PdfViewer {
       }
       article.innerHTML = blocksHtml.join("\n");
     }
+
+    article.querySelectorAll<HTMLElement>(".br-sent").forEach((el) => {
+      const sid = Number(el.dataset.sid);
+      if (Number.isFinite(sid) && !this.reflowSentElements.has(sid)) {
+        this.reflowSentElements.set(sid, el);
+      }
+    });
 
     article.addEventListener("click", (e) => {
       const span = (e.target as HTMLElement | null)?.closest<HTMLElement>(".br-sent");
@@ -387,6 +404,9 @@ export class PdfViewer {
     this.cancelActiveRenders();
     this.observer?.disconnect();
     this.pageWraps.clear();
+    this.pageRectEls.clear();
+    this.reflowSentElements.clear();
+    this.reflowHighlightedSearchEls.clear();
     this.lastViewportWidth = this.viewport.clientWidth;
 
     this.container.innerHTML = "";
@@ -865,6 +885,7 @@ export class PdfViewer {
       if (this.renderedPages.has(pageNum)) {
         this.renderPageHighlights(pageNum);
       } else {
+        this.pageRectEls.delete(pageNum);
         const layer = card.querySelector<HTMLElement>(".pdf-highlight-layer");
         if (layer) layer.innerHTML = "";
       }
@@ -889,34 +910,20 @@ export class PdfViewer {
 
     layer.innerHTML = "";
     const pageSids = this.pageSentences.get(pageNum);
-    if (!pageSids || pageSids.length === 0) return;
-    const hitSet = new Set(state.searchHits);
+    if (!pageSids || pageSids.length === 0) {
+      this.pageRectEls.delete(pageNum);
+      return;
+    }
 
+    const entries: Array<{ sid: number; el: HTMLElement; isFirst: boolean }> = [];
     for (const sid of pageSids) {
       const rects = this.sentenceRects[sid];
       const pageRects = rects.filter((r) => r.page === pageNum);
       if (pageRects.length === 0) continue;
 
-      const isActive = sid === this.activeSid;
-      const isSearchFocus = sid === state.searchFocusedSid;
-      const isSearch = hitSet.has(sid);
-
       for (let i = 0; i < pageRects.length; i++) {
         const r = pageRects[i];
         const div = document.createElement("div");
-        div.className = isActive
-          ? "pdf-sent-rect active"
-          : isSearchFocus
-            ? "pdf-sent-rect search-focus"
-            : isSearch
-              ? "pdf-sent-rect search-hit"
-              : "pdf-sent-rect passive";
-        if (isActive && i === 0) {
-          div.setAttribute("data-active-sid", "true");
-        }
-        if (isSearchFocus && i === 0) {
-          div.setAttribute("data-search-focus", "true");
-        }
         div.style.left = `${(r.x * 100).toFixed(3)}%`;
         div.style.top = `${(r.y * 100).toFixed(3)}%`;
         div.style.width = `${(r.w * 100).toFixed(3)}%`;
@@ -926,6 +933,43 @@ export class PdfViewer {
           this.onSentenceClick(sid);
         });
         layer.appendChild(div);
+        entries.push({ sid, el: div, isFirst: i === 0 });
+      }
+    }
+    this.pageRectEls.set(pageNum, entries);
+    this.updatePageHighlightClasses(pageNum, new Set(state.searchHits));
+  }
+
+  private updatePageHighlightClasses(pageNum: number, hitSet: Set<number>): void {
+    const entries = this.pageRectEls.get(pageNum);
+    if (!entries) {
+      this.renderPageHighlights(pageNum);
+      return;
+    }
+
+    for (const entry of entries) {
+      const isActive = entry.sid === this.activeSid;
+      const isSearchFocus = entry.sid === state.searchFocusedSid;
+      const isSearch = hitSet.has(entry.sid);
+      const nextClass = isActive
+        ? "pdf-sent-rect active"
+        : isSearchFocus
+          ? "pdf-sent-rect search-focus"
+          : isSearch
+            ? "pdf-sent-rect search-hit"
+            : "pdf-sent-rect passive";
+      if (entry.el.className !== nextClass) {
+        entry.el.className = nextClass;
+      }
+      if (isActive && entry.isFirst) {
+        entry.el.setAttribute("data-active-sid", "true");
+      } else {
+        entry.el.removeAttribute("data-active-sid");
+      }
+      if (isSearchFocus && entry.isFirst) {
+        entry.el.setAttribute("data-search-focus", "true");
+      } else {
+        entry.el.removeAttribute("data-search-focus");
       }
     }
   }
@@ -939,32 +983,35 @@ export class PdfViewer {
 
     if (this.reflowActive) {
       if (prevSid >= 0 && prevSid !== sentenceIdx) {
-        const prev = this.container.querySelector<HTMLElement>(`.br-sent[data-sid="${prevSid}"]`);
+        const prev = this.reflowSentElements.get(prevSid);
         if (prev) {
           prev.classList.remove("active");
           prev.removeAttribute("data-active-sid");
         }
       }
-      const cur = this.container.querySelector<HTMLElement>(`.br-sent[data-sid="${sentenceIdx}"]`);
+      const cur = this.reflowSentElements.get(sentenceIdx);
       if (cur) {
         cur.classList.add("active");
         cur.setAttribute("data-active-sid", "true");
       }
-      this.container.querySelectorAll(".br-sent.search-hit, .br-sent.search-focus").forEach((el) => {
+      this.reflowHighlightedSearchEls.forEach((el) => {
         el.classList.remove("search-hit", "search-focus");
         el.removeAttribute("data-search-focus");
       });
+      this.reflowHighlightedSearchEls.clear();
       for (const hitSid of state.searchHits) {
-        const el = this.container.querySelector<HTMLElement>(`.br-sent[data-sid="${hitSid}"]`);
-        if (el) el.classList.add("search-hit");
+        const el = this.reflowSentElements.get(hitSid);
+        if (el) {
+          el.classList.add("search-hit");
+          this.reflowHighlightedSearchEls.add(el);
+        }
       }
       if (state.searchFocusedSid !== null) {
-        const focusEl = this.container.querySelector<HTMLElement>(
-          `.br-sent[data-sid="${state.searchFocusedSid}"]`,
-        );
+        const focusEl = this.reflowSentElements.get(state.searchFocusedSid);
         if (focusEl) {
           focusEl.classList.add("search-focus");
           focusEl.setAttribute("data-search-focus", "true");
+          this.reflowHighlightedSearchEls.add(focusEl);
         }
       }
       return;
@@ -983,8 +1030,9 @@ export class PdfViewer {
     for (const pageNum of this.renderedPages) {
       pagesToRefresh.add(pageNum);
     }
+    const hitSet = new Set(state.searchHits);
     for (const p of pagesToRefresh) {
-      this.renderPageHighlights(p);
+      this.updatePageHighlightClasses(p, hitSet);
     }
   }
 
