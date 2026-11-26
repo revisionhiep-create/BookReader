@@ -6,6 +6,19 @@ Adaptive Android port of **BookReader** powered by **Tauri v2**, **Phonon 31M** 
 
 ---
 
+## Installing on Your Android Phone
+
+**Latest Phone Download:** **[BookReader-android-arm64.apk](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-android-arm64.apk)** *(Android 8.0+ / ARM64 phones & tablets)*
+
+1. Download **`BookReader-android-arm64.apk`** on your phone from [GitHub Releases](https://github.com/revisionhiep-create/BookReader/releases/latest).
+2. Tap the downloaded APK in Chrome / your browser downloads or **Files** app.
+3. If Android asks, turn on **"Allow from this source"** (**Install unknown apps**) for that browser/file manager, then tap **Install**.
+   - **No Developer Mode or PC needed:** Package ID `com.bookreader.android` and its release signing key are officially registered in Android Developer Console.
+4. Open **BookReader** and tap **Allow** on the notification prompt so lock-screen and notification media controls work during background reading.
+5. On first launch, tap **Download Phonon 31M (~65 MB)**, then tap **Import Book** to open a PDF, EPUB, DOCX, or TXT file.
+
+---
+
 ## 1. Adaptive Screen Sizes
 
 BookReader Android adapts automatically across all Android display sizes (`dp`) and orientations:

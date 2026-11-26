@@ -325,11 +325,22 @@ function renderSidebarChrome(): void {
   });
 }
 
+let desktopCcResizeObserver: ResizeObserver | null = null;
+
+function syncDesktopCcHeight(): void {
+  if (isAndroidPlatform()) return;
+  const ccVisible = state.settings.cc_enabled && !ccHostEl.classList.contains("hidden");
+  const h = ccVisible ? Math.round(ccHostEl.getBoundingClientRect().height) : 0;
+  document.documentElement.style.setProperty("--desktop-cc-height", `${h}px`);
+  scrollCtrl.syncBackButton();
+}
+
 function renderChrome(): void {
   renderSidebarChrome();
 
   syncToolbar();
   renderCcBar(ccHostEl);
+  syncDesktopCcHeight();
   if (isAndroidPlatform()) {
     syncMobileChrome();
   }
@@ -688,6 +699,12 @@ async function initApp(): Promise<void> {
   });
 
   mountToolbarOnce();
+  if (!isAndroidPlatform() && typeof ResizeObserver !== "undefined" && !desktopCcResizeObserver) {
+    desktopCcResizeObserver = new ResizeObserver(() => {
+      syncDesktopCcHeight();
+    });
+    desktopCcResizeObserver.observe(ccHostEl);
+  }
   const autoOpenBookId =
     boot.model_ready &&
     boot.settings.last_book_id &&
@@ -705,6 +722,7 @@ async function initApp(): Promise<void> {
     renderSidebarChrome();
     syncToolbar();
     renderCcBar(ccHostEl);
+    syncDesktopCcHeight();
     scrollCtrl.syncBackButton();
     syncLoadingBanner();
     await openBookById(autoOpenBookId);

@@ -1,10 +1,10 @@
 # BookReader
 
-A self-contained cross-platform (**Windows** & **macOS**) desktop text-to-speech reader built with **Rust** and **Tauri v2**, powered locally by **Gradium Phonon 31M** (`gradium/phonon-31m-en` via `ptts`) across 37 English voices, with optional local **Qwen3-TTS** voice cloning.
+A self-contained cross-platform (**Windows**, **macOS**, & **Android**) text-to-speech reader built with **Rust** and **Tauri v2**, powered locally by **Gradium Phonon 31M** (`gradium/phonon-31m-en` via `ptts`) across 37 English voices, with optional local **Qwen3-TTS** voice cloning on desktop.
 
-No Python runtime, account, or cloud TTS API is required — models and voices download locally into a portable `BookReader_Data/` folder right next to `BookReader.exe` (Windows) or `BookReader.app` (macOS).
+No Python runtime, account, or cloud TTS API is required — models and voices download locally into a portable `BookReader_Data/` folder right next to `BookReader.exe` (Windows) or `BookReader.app` (macOS), or privately inside Android app storage.
 
-**[Download Windows (`BookReader.exe`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · **[Download macOS Apple Silicon (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-arm64-portable.dmg)** · **[Download macOS Intel (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-x64-portable.dmg)** · [View Releases](https://github.com/revisionhiep-create/BookReader/releases/latest) · **[Watch Demo](https://youtu.be/9IEjVdOaGtU)**
+**[Download Windows (`BookReader.exe`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · **[Download macOS Apple Silicon (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-arm64-portable.dmg)** · **[Download macOS Intel (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-1.1.0-macos-x64-portable.dmg)** · **[Download Android (`.apk`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-android-arm64.apk)** · [View Releases](https://github.com/revisionhiep-create/BookReader/releases/latest) · **[Watch Demo](https://youtu.be/9IEjVdOaGtU)**
 
 ---
 
@@ -38,6 +38,14 @@ See [macos/README.md](macos/README.md) for full details.
 - Open the `.dmg` for your Mac (**Apple Silicon `arm64`** or **Intel `x64`**) and drag `BookReader.app` into its own writable folder (e.g., `~/BookReader/`).
 - On first launch (unsigned build), **Right-click** `BookReader.app` → **Open** → **Open** (or run `xattr -cr /path/to/BookReader.app`).
 - Portable `BookReader_Data/` is created beside `BookReader.app` (falling back automatically to `~/Library/Application Support/Bookreader/BookReader_Data/` if launched from `/Applications` or a read-only disk image).
+
+### Android (`BookReader-android-arm64.apk`)
+See [android/README.md](android/README.md) for full Android details, tablet/foldable support, and preview/emulator tools.
+1. On your Android phone or tablet (Android 8.0+), download **[BookReader-android-arm64.apk](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-android-arm64.apk)**.
+2. Open the downloaded `.apk` from your browser downloads or **Files** app. If prompted, allow **"Install unknown apps"** for that browser/file manager (Developer Mode / USB debugging is **not** required — `com.bookreader.android` is signed and registered in Android Developer Console).
+3. Launch **BookReader** and allow **Notifications** when prompted so background/lock-screen playback controls appear.
+4. Tap **Download Phonon 31M (~65 MB)** on first launch, then tap **Import Book** to open a **PDF**, **EPUB**, **DOCX**, or **TXT** file.
+*(Note: Voice Cloning is intentionally excluded on Android to keep mobile size and memory low; all 37 English voices, swipeable bottom sheets, adjustable captions, background narration, and WAV/MP3 export are included.)*
 
 ### First-Time Setup & Reading
 1. **First-Time Voice Engine Setup**: Click **Download Phonon 31M (~65 MB)** to install the 4 core model files into `BookReader_Data/models/`.
@@ -101,14 +109,14 @@ BookReader automatically initializes two folders:
   - `BookReader_Data/models/qwen3-tts-1.7b-base/` — downloaded Qwen3-TTS 1.7B-Base weights and 12Hz speech tokenizer (Best Quality, ~4.5 GB)
   - `BookReader_Data/voices/` — downloaded voice conditioning audio files and `cloned/` custom voice prompts
   - `BookReader_Data/books/` — imported copies of your books and cached assets
-- **User Preferences** (`%APPDATA%\Bookreader\` on Windows, `~/Library/Application Support/Bookreader/` on macOS):
+- **User Preferences** (`%APPDATA%\Bookreader\` on Windows, `~/Library/Application Support/Bookreader/` on macOS, private app storage on Android):
   - Saved immediately on every setting change: theme, voice, speed, typography, zoom, caption font size, pause durations, dark PDF page state, pronunciation rules, ignore rules, library reading progress/bookmarks, and saved desktop window geometry (`window_state.json`).
 
 ---
 
 ## Building from Source
 
-See [windows/README.md](windows/README.md) for Windows build instructions and [macos/README.md](macos/README.md) for macOS `.app` & `.dmg` build and feature-testing instructions.
+See [windows/README.md](windows/README.md) for Windows build instructions, [macos/README.md](macos/README.md) for macOS `.app` & `.dmg` instructions, and [android/README.md](android/README.md) for Android APK build & emulator instructions.
 
 ---
 

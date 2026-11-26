@@ -292,9 +292,13 @@ export function renderCcBar(container: HTMLElement): void {
   if (
     mountedActiveWord >= 0 &&
     mountedActiveWord < mountedSpans.length &&
-    container.scrollHeight > container.clientHeight
+    container.scrollHeight > container.clientHeight + 2
   ) {
-    mountedSpans[mountedActiveWord].scrollIntoView({ block: "nearest", behavior: "auto" });
+    mountedSpans[mountedActiveWord].scrollIntoView({
+      block: "center",
+      inline: "nearest",
+      behavior: "auto",
+    });
   }
 
   if (
