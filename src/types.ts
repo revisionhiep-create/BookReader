@@ -47,6 +47,7 @@ export interface Settings {
   default_pdf_footer_ignore_pct: number;
   keep_blur_visible: boolean;
   pdf_invert_dark: boolean;
+  pdf_reflow: boolean;
   last_book_id: string | null;
 }
 

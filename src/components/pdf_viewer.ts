@@ -3,6 +3,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { isAndroidPlatform, notify, persistSettings, state } from "../state";
 import type { BookMeta, SentenceItem, TocEntry } from "../types";
+import { escapeHtml } from "./sidebar";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -55,7 +56,9 @@ export class PdfViewer {
   private lastViewportWidth = 0;
   private resizeTimer: number | undefined;
   private sentenceRects: RectNorm[][] = [];
+  private extractedSentences: SentenceItem[] = [];
   private pageSentences: Map<number, number[]> = new Map();
+  private reflowActive = false;
   private activeSid = -1;
   private prevSearchFocusedSid: number | null = null;
   private basePageDimensions: Array<{ width: number; height: number }> = [];
@@ -103,7 +106,9 @@ export class PdfViewer {
     this.currentBook = null;
     this.pageWraps.clear();
     this.sentenceRects = [];
+    this.extractedSentences = [];
     this.pageSentences.clear();
+    this.reflowActive = false;
     this.basePageDimensions = [];
     this.activeSid = -1;
     this.prevSearchFocusedSid = null;
@@ -162,8 +167,14 @@ export class PdfViewer {
 
     reportProgress("Jumping to your last reading position, please wait...");
     this.sentenceRects = extracted.rects;
+    this.extractedSentences = extracted.sentences;
     this.pageSentences = extracted.pageSentences;
-    this.buildDomSkeleton();
+    this.reflowActive = Boolean(state.settings.pdf_reflow && !state.pdfMarginsEditing);
+    if (this.reflowActive) {
+      this.buildReflowDom();
+    } else {
+      this.buildDomSkeleton();
+    }
     this.activeSid = extracted.newCursor;
     this.syncHighlight(extracted.newCursor);
     await this.onSentencesExtracted(
@@ -180,13 +191,13 @@ export class PdfViewer {
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver?.disconnect();
       this.resizeObserver = new ResizeObserver(() => {
-        if (!isAndroidPlatform() || !this.pdfDoc || mountGen !== this.renderGeneration) return;
+        if (!isAndroidPlatform() || !this.pdfDoc || this.reflowActive || mountGen !== this.renderGeneration) return;
         const w = this.viewport.clientWidth;
         if (w <= 32 || Math.abs(w - this.lastViewportWidth) <= 2) return;
         this.lastViewportWidth = w;
         if (this.resizeTimer !== undefined) window.clearTimeout(this.resizeTimer);
         this.resizeTimer = window.setTimeout(() => {
-          if (mountGen === this.renderGeneration && this.pdfDoc) {
+          if (mountGen === this.renderGeneration && this.pdfDoc && !this.reflowActive) {
             this.rebuildForZoom();
           }
         }, 120);
@@ -204,8 +215,119 @@ export class PdfViewer {
     return zoom;
   }
 
+  public isReflowActive(): boolean {
+    return this.reflowActive;
+  }
+
+  public applyReflowTypography(): void {
+    const prose = this.container.querySelector<HTMLElement>(".pdf-reflow-prose");
+    if (!prose) return;
+    const t = state.settings.typography;
+    const scaledFont = Math.round(t.font_size * t.pdf_zoom);
+    const scaledWidth = Math.round(t.max_width * Math.min(1.55, Math.max(0.85, t.pdf_zoom)));
+    prose.style.setProperty("--reader-font-size", `${scaledFont}px`);
+    prose.style.setProperty("--reader-line-height", `${t.line_height}`);
+    prose.style.setProperty("--reader-max-width", `${scaledWidth}px`);
+  }
+
+  public setReflowMode(enabled: boolean): void {
+    if (!this.pdfDoc || !this.currentBook || this.reflowActive === enabled) return;
+    this.reflowActive = enabled;
+    if (enabled) {
+      this.buildReflowDom();
+    } else {
+      this.buildDomSkeleton();
+    }
+    this.syncHighlight(this.activeSid);
+    if (!enabled) {
+      this.refreshVisibleHitLayers(this.activeSid);
+    }
+  }
+
+  private buildReflowDom(): void {
+    if (!this.pdfDoc || !this.currentBook) return;
+    this.cancelActiveRenders();
+    this.observer?.disconnect();
+    this.observer = null;
+    this.pageWraps.clear();
+    this.container.innerHTML = "";
+
+    const article = document.createElement("article");
+    article.className = "br-prose pdf-reflow-prose";
+
+    if (this.extractedSentences.length === 0) {
+      article.innerHTML = "<p>No readable text found in this PDF.</p>";
+    } else {
+      const totalPages = this.pdfDoc.numPages;
+      const byPage = new Map<number, SentenceItem[]>();
+      for (const s of this.extractedSentences) {
+        const p = s.page ?? 1;
+        let arr = byPage.get(p);
+        if (!arr) {
+          arr = [];
+          byPage.set(p, arr);
+        }
+        arr.push(s);
+      }
+
+      const pages = Array.from(byPage.keys()).sort((a, b) => a - b);
+      const blocksHtml: string[] = [];
+      for (const p of pages) {
+        const pageSents = byPage.get(p)!;
+        const paras: SentenceItem[][] = [];
+        let curPara: SentenceItem[] = [];
+        let curParaIdx: number | null = null;
+        for (const s of pageSents) {
+          if (curPara.length === 0 || s.paragraph_idx === curParaIdx) {
+            curPara.push(s);
+            curParaIdx = s.paragraph_idx;
+          } else {
+            paras.push(curPara);
+            curPara = [s];
+            curParaIdx = s.paragraph_idx;
+          }
+        }
+        if (curPara.length > 0) paras.push(curPara);
+
+        const paraHtml = paras
+          .map(
+            (group) =>
+              `<p>${group
+                .map((s) => `<span class="br-sent" data-sid="${s.id}">${escapeHtml(s.text)}</span>`)
+                .join(" ")}</p>`,
+          )
+          .join("\n");
+
+        const sep =
+          totalPages > 1
+            ? `<div class="pdf-reflow-page-sep">Page ${p}</div>`
+            : "";
+        blocksHtml.push(
+          `<section class="pdf-reflow-page-block" data-page="${p}">${sep}${paraHtml}</section>`,
+        );
+      }
+      article.innerHTML = blocksHtml.join("\n");
+    }
+
+    article.addEventListener("click", (e) => {
+      const span = (e.target as HTMLElement | null)?.closest<HTMLElement>(".br-sent");
+      if (!span) return;
+      const sid = Number(span.dataset.sid);
+      if (Number.isFinite(sid)) {
+        this.onSentenceClick(sid);
+      }
+    });
+
+    this.container.appendChild(article);
+    this.applyReflowTypography();
+  }
+
   public rebuildForZoom(): void {
     if (!this.pdfDoc || !this.currentBook) return;
+    if (this.reflowActive) {
+      this.applyReflowTypography();
+      return;
+    }
 
     const maxBefore = Math.max(1, this.viewport.scrollHeight - this.viewport.clientHeight);
     const scrollFrac = this.viewport.scrollTop / maxBefore;
@@ -236,13 +358,14 @@ export class PdfViewer {
   }
 
   public syncDarkInvert(): void {
+    if (this.reflowActive) return;
     this.pageWraps.forEach((card) =>
       card.classList.toggle("dark-invert", state.settings.pdf_invert_dark),
     );
   }
 
   private renderVisiblePages(): void {
-    if (!this.pdfDoc) return;
+    if (!this.pdfDoc || this.reflowActive) return;
     const vpRect = this.viewport.getBoundingClientRect();
     const margin = 700;
     this.pageWraps.forEach((card, p) => {
@@ -254,7 +377,7 @@ export class PdfViewer {
   }
 
   public refreshMarginOverlayUI(): void {
-    if (!this.currentBook) return;
+    if (!this.currentBook || this.reflowActive) return;
     this.renderMarginControlsBar();
     this.syncCurtainPositions();
   }
@@ -264,6 +387,7 @@ export class PdfViewer {
     this.cancelActiveRenders();
     this.observer?.disconnect();
     this.pageWraps.clear();
+    this.lastViewportWidth = this.viewport.clientWidth;
 
     this.container.innerHTML = "";
 
@@ -590,6 +714,7 @@ export class PdfViewer {
     if (!extracted || mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
 
     this.sentenceRects = extracted.rects;
+    this.extractedSentences = extracted.sentences;
     this.pageSentences = extracted.pageSentences;
     await this.onSentencesExtracted(
       extracted.sentences,
@@ -597,7 +722,12 @@ export class PdfViewer {
       extracted.newCursor,
       preservingPos,
     );
-    this.refreshVisibleHitLayers(extracted.newCursor);
+    if (this.reflowActive) {
+      this.buildReflowDom();
+      this.syncHighlight(extracted.newCursor);
+    } else {
+      this.refreshVisibleHitLayers(extracted.newCursor);
+    }
   }
 
   private async extractSentencesData(
@@ -730,6 +860,7 @@ export class PdfViewer {
   }
 
   private refreshVisibleHitLayers(activeIdx: number): void {
+    if (this.reflowActive) return;
     this.pageWraps.forEach((card, pageNum) => {
       if (this.renderedPages.has(pageNum)) {
         this.renderPageHighlights(pageNum);
@@ -806,6 +937,39 @@ export class PdfViewer {
     this.activeSid = sentenceIdx;
     this.prevSearchFocusedSid = state.searchFocusedSid;
 
+    if (this.reflowActive) {
+      if (prevSid >= 0 && prevSid !== sentenceIdx) {
+        const prev = this.container.querySelector<HTMLElement>(`.br-sent[data-sid="${prevSid}"]`);
+        if (prev) {
+          prev.classList.remove("active");
+          prev.removeAttribute("data-active-sid");
+        }
+      }
+      const cur = this.container.querySelector<HTMLElement>(`.br-sent[data-sid="${sentenceIdx}"]`);
+      if (cur) {
+        cur.classList.add("active");
+        cur.setAttribute("data-active-sid", "true");
+      }
+      this.container.querySelectorAll(".br-sent.search-hit, .br-sent.search-focus").forEach((el) => {
+        el.classList.remove("search-hit", "search-focus");
+        el.removeAttribute("data-search-focus");
+      });
+      for (const hitSid of state.searchHits) {
+        const el = this.container.querySelector<HTMLElement>(`.br-sent[data-sid="${hitSid}"]`);
+        if (el) el.classList.add("search-hit");
+      }
+      if (state.searchFocusedSid !== null) {
+        const focusEl = this.container.querySelector<HTMLElement>(
+          `.br-sent[data-sid="${state.searchFocusedSid}"]`,
+        );
+        if (focusEl) {
+          focusEl.classList.add("search-focus");
+          focusEl.setAttribute("data-search-focus", "true");
+        }
+      }
+      return;
+    }
+
     const pagesToRefresh = new Set<number>();
     const addPages = (sid: number | null) => {
       if (sid !== null && sid >= 0 && this.sentenceRects[sid]) {
@@ -825,6 +989,15 @@ export class PdfViewer {
   }
 
   public scrollToPage(pageNum: number): void {
+    if (this.reflowActive) {
+      const sec = this.container.querySelector<HTMLElement>(
+        `.pdf-reflow-page-block[data-page="${pageNum}"]`,
+      );
+      if (sec) {
+        sec.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      return;
+    }
     const card = this.pageWraps.get(pageNum);
     if (card) {
       card.scrollIntoView({ behavior: "smooth", block: "start" });

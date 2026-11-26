@@ -201,6 +201,7 @@ pub struct Settings {
     pub default_pdf_footer_ignore_pct: f32,
     pub keep_blur_visible: bool,
     pub pdf_invert_dark: bool,
+    pub pdf_reflow: bool,
     pub last_book_id: Option<String>,
 }
 
@@ -221,6 +222,7 @@ impl Default for Settings {
             default_pdf_footer_ignore_pct: 0.06,
             keep_blur_visible: true,
             pdf_invert_dark: true,
+            pdf_reflow: false,
             last_book_id: None,
         }
     }

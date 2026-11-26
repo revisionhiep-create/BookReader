@@ -81,6 +81,7 @@ const DEFAULT_SETTINGS: Settings = {
   default_pdf_footer_ignore_pct: 0.06,
   keep_blur_visible: true,
   pdf_invert_dark: true,
+  pdf_reflow: false,
   last_book_id: null,
 };
 

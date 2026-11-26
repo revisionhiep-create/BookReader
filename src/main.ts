@@ -67,7 +67,7 @@ root.innerHTML = `
       <div id="search-host" style="display:none;"></div>
       <div id="loading-banner" class="loading-banner hidden" role="status" aria-live="polite"></div>
       <div id="reader-viewport" class="reader-viewport">
-        <div id="viewer-host" style="width:100%;display:flex;flex-direction:column;align-items:center;"></div>
+        <div id="viewer-host" style="width:100%;max-width:100%;display:flex;flex-direction:column;align-items:flex-start;"></div>
       </div>
       <button id="back-to-reading-btn" class="back-to-reading-btn" type="button"></button>
       <div id="cc-host" class="cc-bar hidden"></div>
@@ -351,6 +351,8 @@ function renderChrome(): void {
   }
 }
 
+let shownPdfReflowHint = false;
+
 function applyPageZoom(nextRaw: number): void {
   if (!state.activeBook) return;
   const next = Math.max(0.6, Math.min(2.2, Number(nextRaw.toFixed(2))));
@@ -359,6 +361,15 @@ function applyPageZoom(nextRaw: number): void {
     if (Math.abs(next - t.pdf_zoom) < 0.001) return;
     void persistSettings({ typography: { ...t, pdf_zoom: next } });
     pdfViewer.rebuildForZoom();
+    if (
+      isAndroidPlatform() &&
+      !state.settings.pdf_reflow &&
+      next > 1.05 &&
+      !shownPdfReflowHint
+    ) {
+      shownPdfReflowHint = true;
+      showToast("Tip: Open Aa → Reflow Text to auto-wrap zoomed PDFs");
+    }
   } else {
     if (Math.abs(next - t.reader_zoom) < 0.001) return;
     void persistSettings({ typography: { ...t, reader_zoom: next } });
@@ -380,6 +391,17 @@ function resetPageZoom(): void {
 function togglePdfInvert(): void {
   if (state.activeBook?.format !== "pdf") return;
   void persistSettings({ pdf_invert_dark: !state.settings.pdf_invert_dark });
+}
+
+function setPdfReflow(enabled: boolean): void {
+  if (state.activeBook?.format !== "pdf") return;
+  if (enabled && state.pdfMarginsEditing) {
+    state.pdfMarginsEditing = false;
+  }
+  void persistSettings({ pdf_reflow: enabled });
+  pdfViewer.setReflowMode(enabled);
+  renderChrome();
+  scrollCtrl.onActiveSentenceChanged(state.tts.sentence_idx, true, true);
 }
 
 function applyCcSize(nextRaw: number): void {
@@ -420,6 +442,7 @@ function getPlaybackActions() {
     onZoomStep: stepPageZoom,
     onZoomReset: resetPageZoom,
     onTogglePdfInvert: togglePdfInvert,
+    onTogglePdfReflow: () => setPdfReflow(!state.settings.pdf_reflow),
     onCcSizeStep: (delta: number) => applyCcSize(state.settings.typography.cc_font_size + delta),
     onCcSizeReset: () => applyCcSize(21),
     onToggleSearch: () => {
@@ -434,7 +457,13 @@ function getPlaybackActions() {
     },
     onToggleMarginsEdit: () => {
       if (state.activeBook?.format !== "pdf") return;
-      state.pdfMarginsEditing = !state.pdfMarginsEditing;
+      const next = !state.pdfMarginsEditing;
+      state.pdfMarginsEditing = next;
+      if (next && state.settings.pdf_reflow) {
+        void persistSettings({ pdf_reflow: false });
+        pdfViewer.setReflowMode(false);
+        showToast("Switched to Original Page to adjust PDF margins");
+      }
       pdfViewer.refreshMarginOverlayUI();
       renderChrome();
     },
@@ -473,7 +502,11 @@ function mountToolbarOnce(): void {
       },
       {
         ...actions,
-        onTypographyChanged: () => richViewer.applyTypography(),
+        onTogglePdfReflow: setPdfReflow,
+        onTypographyChanged: () => {
+          richViewer.applyTypography();
+          pdfViewer.applyReflowTypography();
+        },
         onLayoutChanged: () => scrollCtrl.syncBackButton(),
         onToast: showToast,
       },
@@ -572,7 +605,10 @@ function renderModal(): void {
     case "settings":
       renderSettingsModal(modalHostEl, {
         onClose: closeModal,
-        onTypographyChanged: () => richViewer.applyTypography(),
+        onTypographyChanged: () => {
+          richViewer.applyTypography();
+          pdfViewer.applyReflowTypography();
+        },
       });
       return;
   }

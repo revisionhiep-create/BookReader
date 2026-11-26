@@ -11,6 +11,7 @@ export interface MobileChromeHandlers {
   onZoomStep: (delta: number) => void;
   onZoomReset: () => void;
   onTogglePdfInvert: () => void;
+  onTogglePdfReflow: (enabled: boolean) => void;
   onCcSizeStep: (delta: number) => void;
   onCcSizeReset: () => void;
   onToggleSearch: () => void;
@@ -541,7 +542,7 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
         ? "Sleep (Ch)"
         : "Sleep Timer";
 
-  const nextStructureKey = `${isPdf}|${s.theme === "dark"}`;
+  const nextStructureKey = `${isPdf}|${s.theme === "dark"}|${s.pdf_reflow}`;
   if (
     mountedSheet === "quick" &&
     quickSheetStructureKey === nextStructureKey &&
@@ -549,6 +550,8 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
   ) {
     container.querySelector("#m-theme-dark")?.classList.toggle("active", s.theme === "dark");
     container.querySelector("#m-theme-light")?.classList.toggle("active", s.theme === "light");
+    container.querySelector("#m-pdf-mode-original")?.classList.toggle("active", !s.pdf_reflow);
+    container.querySelector("#m-pdf-mode-reflow")?.classList.toggle("active", s.pdf_reflow);
 
     const zoomReset = container.querySelector<HTMLButtonElement>("#m-zoom-reset");
     if (zoomReset) {
@@ -626,6 +629,16 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
           </div>
 
           <div class="qr-section">
+            ${
+              isPdf
+                ? `
+              <div class="qr-two-col">
+                <button type="button" class="qr-pill-btn ${!s.pdf_reflow ? "active" : ""}" id="m-pdf-mode-original">Original Page</button>
+                <button type="button" class="qr-pill-btn ${s.pdf_reflow ? "active" : ""}" id="m-pdf-mode-reflow">Reflow Text</button>
+              </div>
+            `
+                : ""
+            }
             <div class="qr-seg-row">
               <span style="font-size:13px;font-weight:500;">Page Zoom</span>
               <div class="qr-stepper">
@@ -636,7 +649,7 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
             </div>
 
             ${
-              !isPdf
+              !isPdf || s.pdf_reflow
                 ? `
               <div class="setting-row">
                 <span>Font Size — <strong id="m-font-size-val">${typ.font_size} px</strong></span>
@@ -682,7 +695,7 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
               ? `
             <div class="qr-two-col">
               ${
-                s.theme === "dark"
+                !s.pdf_reflow && s.theme === "dark"
                   ? `<button type="button" class="qr-pill-btn ${s.pdf_invert_dark ? "active" : ""}" id="m-pdf-invert">Dark PDF Page</button>`
                   : `<div></div>`
               }
@@ -771,6 +784,8 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
     syncMobileChrome();
   });
   container.querySelector("#m-pdf-invert")?.addEventListener("click", handlers.onTogglePdfInvert);
+  container.querySelector("#m-pdf-mode-original")?.addEventListener("click", () => handlers.onTogglePdfReflow(false));
+  container.querySelector("#m-pdf-mode-reflow")?.addEventListener("click", () => handlers.onTogglePdfReflow(true));
   container.querySelector("#m-pdf-margins")?.addEventListener("click", () => {
     handlers.onToggleMarginsEdit();
     close();

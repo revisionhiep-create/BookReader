@@ -11,6 +11,7 @@ export interface ToolbarHandlers {
   onZoomStep: (delta: number) => void;
   onZoomReset: () => void;
   onTogglePdfInvert: () => void;
+  onTogglePdfReflow: () => void;
   onCcSizeStep: (delta: number) => void;
   onCcSizeReset: () => void;
   onToggleSearch: () => void;
@@ -49,6 +50,7 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
           <button class="seg-val" id="btn-zoom-reset" title="Reset page zoom to 100%">100%</button>
           <button class="seg-btn" id="btn-zoom-in" title="Zoom in (${modKey}++)">${Icons.zoomIn()}</button>
         </div>
+        <button class="toolbar-chip" id="btn-pdf-reflow" title="Auto-wrap PDF text cleanly at any zoom size">Reflow Text</button>
         <button class="toolbar-chip" id="btn-pdf-dark-page" title="Invert white PDF pages in dark mode">Dark Page</button>
       </div>
 
@@ -119,6 +121,7 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
   container.querySelector("#btn-zoom-out")?.addEventListener("click", () => handlers.onZoomStep(-0.1));
   container.querySelector("#btn-zoom-reset")?.addEventListener("click", handlers.onZoomReset);
   container.querySelector("#btn-zoom-in")?.addEventListener("click", () => handlers.onZoomStep(0.1));
+  container.querySelector("#btn-pdf-reflow")?.addEventListener("click", handlers.onTogglePdfReflow);
   container.querySelector("#btn-pdf-dark-page")?.addEventListener("click", handlers.onTogglePdfInvert);
 
   container.querySelector("#btn-voice-picker")?.addEventListener("click", () => {
@@ -204,9 +207,15 @@ export function syncToolbar(): void {
   }
   if (zoomLbl) zoomLbl.textContent = `${Math.round(zoomFactor * 100)}%`;
 
+  const reflowBtn = container.querySelector<HTMLButtonElement>("#btn-pdf-reflow");
+  if (reflowBtn) {
+    reflowBtn.style.display = isPdf ? "inline-flex" : "none";
+    reflowBtn.classList.toggle("active", state.settings.pdf_reflow);
+  }
+
   const darkPageBtn = container.querySelector<HTMLButtonElement>("#btn-pdf-dark-page");
   if (darkPageBtn) {
-    const showDarkPage = isPdf && state.settings.theme === "dark";
+    const showDarkPage = isPdf && !state.settings.pdf_reflow && state.settings.theme === "dark";
     darkPageBtn.style.display = showDarkPage ? "inline-flex" : "none";
     darkPageBtn.classList.toggle("active", state.settings.pdf_invert_dark);
   }
