@@ -11,6 +11,7 @@ import android.provider.OpenableColumns
 import android.view.View
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -40,11 +41,12 @@ class MainActivity : TauriActivity() {
     val rootView: View = findViewById(android.R.id.content)
     rootView.setBackgroundColor(bgColor)
     ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, insets ->
-      val bars = insets.getInsets(
-        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-      )
+      val mask = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+      val bars = insets.getInsets(mask)
       view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-      insets
+      WindowInsetsCompat.Builder(insets)
+        .setInsets(mask, Insets.NONE)
+        .build()
     }
     ViewCompat.requestApplyInsets(rootView)
   }

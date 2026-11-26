@@ -25,6 +25,10 @@ KOTLIN_DEST="$GEN_ANDROID/app/src/main/java/com/bookreader/android"
 mkdir -p "$KOTLIN_DEST"
 cp "$SCRIPT_DIR/kotlin/BookReaderPlaybackService.kt" "$KOTLIN_DEST/BookReaderPlaybackService.kt"
 cp "$SCRIPT_DIR/kotlin/MainActivity.kt" "$KOTLIN_DEST/MainActivity.kt"
+if [[ -f "$SCRIPT_DIR/assets/adi-registration.properties" ]]; then
+  mkdir -p "$GEN_ANDROID/app/src/main/assets"
+  cp "$SCRIPT_DIR/assets/adi-registration.properties" "$GEN_ANDROID/app/src/main/assets/adi-registration.properties"
+fi
 
 PROGUARD="$GEN_ANDROID/app/proguard-rules.pro"
 if ! grep -q "com.bookreader.android.MainActivity" "$PROGUARD" 2>/dev/null; then
@@ -214,6 +218,10 @@ elif [[ "$MODE" == "aarch64" ]]; then
   find_and_stage "*arm64*.apk" "BookReader-android-arm64.apk" "*universal*.apk"
 elif [[ "$MODE" == "x86_64" ]]; then
   find_and_stage "*x86_64*.apk" "BookReader-android-x86_64.apk" "*universal*.apk"
+fi
+
+if [[ -f "$DIST_DIR/BookReader-android-arm64.apk" ]]; then
+  unzip -l "$DIST_DIR/BookReader-android-arm64.apk" | grep "assets/adi-registration.properties"
 fi
 
 ls -lh "$DIST_DIR"

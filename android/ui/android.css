@@ -10,10 +10,10 @@ html:not([data-platform="android"]) .toc-mobile-tabs {
 
 /* Android Adaptive UI (Scoped strictly to data-platform="android") */
 html[data-platform="android"] {
-  --safe-top: var(--preview-safe-top, env(safe-area-inset-top, 0px));
-  --safe-bottom: var(--preview-safe-bottom, env(safe-area-inset-bottom, 0px));
-  --safe-left: var(--preview-safe-left, env(safe-area-inset-left, 0px));
-  --safe-right: var(--preview-safe-right, env(safe-area-inset-right, 0px));
+  --safe-top: var(--preview-safe-top, 0px);
+  --safe-bottom: var(--preview-safe-bottom, 0px);
+  --safe-left: var(--preview-safe-left, 0px);
+  --safe-right: var(--preview-safe-right, 0px);
   --dock-height: 0px;
   --cc-height: 0px;
   --touch-min: 44px;

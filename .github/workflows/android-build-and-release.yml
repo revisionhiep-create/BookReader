@@ -86,7 +86,20 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
 
       - name: Build signed Android APKs (arm64 + x86_64)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
         run: |
+          KS_TMP=""
+          cleanup_ks() { [[ -n "$KS_TMP" ]] && rm -f "$KS_TMP"; }
+          trap cleanup_ks EXIT
+          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
+            KS_TMP="$RUNNER_TEMP/bookreader-release.jks"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KS_TMP"
+            export ANDROID_KEYSTORE_PATH="$KS_TMP"
+          fi
           chmod +x android/build_android_apk.sh
           ./android/build_android_apk.sh split
 
