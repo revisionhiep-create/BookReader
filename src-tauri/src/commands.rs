@@ -33,19 +33,18 @@ pub struct AppState {
     pub sleep_timer: Arc<SleepTimer>,
 }
 
-#[tauri::command]
-pub fn get_bootstrap(state: State<'_, AppState>) -> AppBootstrap {
-    let paths = state.storage.paths();
+fn build_bootstrap(storage: &Storage, tts: &TtsController) -> AppBootstrap {
+    let paths = storage.paths();
     let voice_cloning_enabled = cfg!(feature = "voice-cloning") && !cfg!(target_os = "android");
     let cloned = if voice_cloning_enabled {
-        state.storage.cloned_voices()
+        storage.cloned_voices()
     } else {
         Vec::new()
     };
-    let mut settings = state.storage.settings();
+    let mut settings = storage.settings();
     if !voice_cloning_enabled && AppPaths::is_cloned_voice_id(&settings.voice_id) {
         settings.voice_id = pick_downloaded_fallback_voice(paths);
-        let _ = state.storage.save_settings(settings.clone());
+        let _ = storage.save_settings(settings.clone());
     }
     let variant = settings.qwen_model_variant;
     let platform = if cfg!(target_os = "android") {
@@ -59,11 +58,11 @@ pub fn get_bootstrap(state: State<'_, AppState>) -> AppBootstrap {
     };
     AppBootstrap {
         model_ready: paths.model_ready(),
-        engine_loaded: state.tts.is_model_loaded(),
+        engine_loaded: tts.is_model_loaded(),
         qwen_model_variant: variant,
         qwen_model_ready: voice_cloning_enabled && paths.qwen_model_ready_for(variant),
         qwen_device_label: if voice_cloning_enabled {
-            state.tts.engine().qwen().device_label()
+            tts.engine().qwen().device_label()
         } else {
             "Disabled".to_string()
         },
@@ -73,13 +72,22 @@ pub fn get_bootstrap(state: State<'_, AppState>) -> AppBootstrap {
         platform: platform.to_string(),
         voice_cloning_enabled,
         settings,
-        library: state.storage.library(),
-        pronunciations: state.storage.pronunciations(),
-        ignore_rules: state.storage.ignore_rules(),
+        library: storage.library(),
+        pronunciations: storage.pronunciations(),
+        ignore_rules: storage.ignore_rules(),
         voices: list_voices_with_status(paths, &cloned),
         mp3_native_available: true,
         ffmpeg_available: false,
     }
+}
+
+#[tauri::command]
+pub async fn get_bootstrap(state: State<'_, AppState>) -> Result<AppBootstrap, String> {
+    let storage = Arc::clone(&state.storage);
+    let tts = Arc::clone(&state.tts);
+    tokio::task::spawn_blocking(move || build_bootstrap(&storage, &tts))
+        .await
+        .map_err(|e| format!("Failed joining bootstrap task: {e}"))
 }
 
 fn build_qwen_model_status(storage: &Storage, tts: &TtsController) -> QwenModelStatus {
@@ -503,72 +511,84 @@ pub fn import_rules_json(
 }
 
 #[tauri::command]
-pub fn import_book_file(state: State<'_, AppState>, path: String) -> Result<BookMeta, String> {
-    #[cfg(target_os = "android")]
-    if path.starts_with("content://") {
-        let tmp_dir = state.storage.paths().data_dir.join("import_tmp");
-        let copied = crate::media_keys::copy_android_content_uri(&path, &tmp_dir)?;
-        let res = import_book(&copied, &state.storage);
-        if let Some(parent) = copied.parent() {
-            if parent != tmp_dir.as_path() && parent.starts_with(&tmp_dir) {
-                let _ = std::fs::remove_dir_all(parent);
+pub async fn import_book_file(state: State<'_, AppState>, path: String) -> Result<BookMeta, String> {
+    let storage = Arc::clone(&state.storage);
+    tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "android")]
+        if path.starts_with("content://") {
+            let tmp_dir = storage.paths().data_dir.join("import_tmp");
+            let copied = crate::media_keys::copy_android_content_uri(&path, &tmp_dir)?;
+            let res = import_book(&copied, &storage);
+            if let Some(parent) = copied.parent() {
+                if parent != tmp_dir.as_path() && parent.starts_with(&tmp_dir) {
+                    let _ = std::fs::remove_dir_all(parent);
+                } else {
+                    let _ = std::fs::remove_file(&copied);
+                }
             } else {
                 let _ = std::fs::remove_file(&copied);
             }
-        } else {
-            let _ = std::fs::remove_file(&copied);
+            return res;
         }
-        return res;
-    }
-    import_book(Path::new(&path), &state.storage)
+        import_book(Path::new(&path), &storage)
+    })
+    .await
+    .map_err(|e| format!("Failed joining book import task: {e}"))?
 }
 
 #[tauri::command]
-pub fn import_book_bytes(
+pub async fn import_book_bytes(
     state: State<'_, AppState>,
     filename: String,
     bytes: Vec<u8>,
 ) -> Result<BookMeta, String> {
-    store_imported_book_bytes(&filename, &bytes, &state.storage)
+    let storage = Arc::clone(&state.storage);
+    tokio::task::spawn_blocking(move || store_imported_book_bytes(&filename, &bytes, &storage))
+        .await
+        .map_err(|e| format!("Failed joining book byte import task: {e}"))?
 }
 
 #[tauri::command]
-pub fn open_book(state: State<'_, AppState>, book_id: String) -> Result<DocumentPayload, String> {
-    let mut book = state
-        .storage
-        .get_book(&book_id)
-        .ok_or_else(|| format!("Book not found: {book_id}"))?;
-    book.last_opened_at = now_unix_secs();
-    let _ = state.storage.upsert_book(book.clone());
+pub async fn open_book(state: State<'_, AppState>, book_id: String) -> Result<DocumentPayload, String> {
+    let storage = Arc::clone(&state.storage);
+    let tts = Arc::clone(&state.tts);
+    let media_keys = Arc::clone(&state.media_keys);
+    tokio::task::spawn_blocking(move || {
+        let mut book = storage
+            .get_book(&book_id)
+            .ok_or_else(|| format!("Book not found: {book_id}"))?;
+        book.last_opened_at = now_unix_secs();
+        let _ = storage.upsert_book(book.clone());
 
-    let mut settings = state.storage.settings();
-    settings.last_book_id = Some(book_id.clone());
-    let _ = state.storage.save_settings(settings);
+        let mut settings = storage.settings();
+        settings.last_book_id = Some(book_id.clone());
+        let _ = storage.save_settings(settings);
 
-    state
-        .media_keys
-        .update_status(Some(&book.title), false, false);
+        media_keys.update_status(Some(&book.title), false, false);
 
-    if book.format == BookFormat::Pdf {
-        // PDF text extraction runs with PDF.js using the book's ignore margins and then calls set_pdf_sentences
-        return Ok(DocumentPayload {
-            book,
-            sentences: Vec::new(),
-            toc: Vec::new(),
-            html_chapters: Vec::new(),
-        });
-    }
+        if book.format == BookFormat::Pdf {
+            // PDF text extraction runs with PDF.js using the book's ignore margins and then calls set_pdf_sentences
+            return Ok(DocumentPayload {
+                book,
+                sentences: Vec::new(),
+                toc: Vec::new(),
+                html_chapters: Vec::new(),
+            });
+        }
 
-    let path = state.storage.paths().book_path(&book.stored_filename)?;
-    let payload = load_non_pdf_document(&path, book.clone())?;
-    let _ = state.storage.upsert_book(payload.book.clone());
-    state.tts.load_document(
-        payload.book.id.clone(),
-        payload.sentences.clone(),
-        payload.book.current_sentence_idx,
-        true,
-    );
-    Ok(payload)
+        let path = storage.paths().book_path(&book.stored_filename)?;
+        let payload = load_non_pdf_document(&path, book.clone())?;
+        let _ = storage.upsert_book(payload.book.clone());
+        tts.load_document(
+            payload.book.id.clone(),
+            payload.sentences.clone(),
+            payload.book.current_sentence_idx,
+            true,
+        );
+        Ok(payload)
+    })
+    .await
+    .map_err(|e| format!("Failed joining open_book task: {e}"))?
 }
 
 #[tauri::command]
@@ -668,55 +688,89 @@ pub fn delete_book(state: State<'_, AppState>, book_id: String) -> Result<Vec<Bo
 }
 
 #[tauri::command]
-pub fn tts_play_from(
+pub async fn tts_play_from(
     state: State<'_, AppState>,
     sentence_idx: usize,
 ) -> Result<TtsStateEvent, String> {
-    let voice_id = state.storage.settings().voice_id;
-    validate_voice_ready(&state.storage, &voice_id)?;
+    let storage = Arc::clone(&state.storage);
+    let tts = Arc::clone(&state.tts);
+    let media_keys = Arc::clone(&state.media_keys);
+    tokio::task::spawn_blocking(move || {
+        let voice_id = storage.settings().voice_id;
+        validate_voice_ready(&storage, &voice_id)?;
 
-    state.tts.play_from(sentence_idx);
-    let evt = state.tts.current_state_event();
-    let title = evt
-        .book_id
-        .as_deref()
-        .and_then(|id| state.storage.get_book(id))
-        .map(|b| b.title);
-    let playing = evt.status == "playing" || evt.status == "loading";
-    let paused = evt.status == "paused";
-    state
-        .media_keys
-        .update_status(title.as_deref(), playing, paused);
-    Ok(evt)
+        tts.play_from(sentence_idx);
+        let evt = tts.current_state_event();
+        let title = evt
+            .book_id
+            .as_deref()
+            .and_then(|id| storage.get_book(id))
+            .map(|b| b.title);
+        let playing = evt.status == "playing" || evt.status == "loading";
+        let paused = evt.status == "paused";
+        media_keys.update_status(title.as_deref(), playing, paused);
+        Ok(evt)
+    })
+    .await
+    .map_err(|e| format!("Failed joining tts_play_from task: {e}"))?
 }
 
 #[tauri::command]
-pub fn tts_toggle_play_pause(state: State<'_, AppState>) -> Result<TtsStateEvent, String> {
-    if state.tts.is_actively_playing() {
-        state.tts.pause();
-    } else {
-        let voice_id = state.storage.settings().voice_id;
-        validate_voice_ready(&state.storage, &voice_id)?;
-        state.tts.resume();
-    }
-    let evt = state.tts.current_state_event();
-    let playing = evt.status == "playing" || evt.status == "loading";
-    let paused = evt.status == "paused";
-    state.media_keys.update_status(None, playing, paused);
-    Ok(evt)
+pub async fn tts_toggle_play_pause(state: State<'_, AppState>) -> Result<TtsStateEvent, String> {
+    let storage = Arc::clone(&state.storage);
+    let tts = Arc::clone(&state.tts);
+    let media_keys = Arc::clone(&state.media_keys);
+    tokio::task::spawn_blocking(move || {
+        if tts.is_actively_playing() {
+            tts.pause();
+        } else {
+            let voice_id = storage.settings().voice_id;
+            validate_voice_ready(&storage, &voice_id)?;
+            tts.resume();
+        }
+        let evt = tts.current_state_event();
+        let playing = evt.status == "playing" || evt.status == "loading";
+        let paused = evt.status == "paused";
+        media_keys.update_status(None, playing, paused);
+        Ok(evt)
+    })
+    .await
+    .map_err(|e| format!("Failed joining tts_toggle_play_pause task: {e}"))?
 }
 
 #[tauri::command]
-pub fn tts_pause(state: State<'_, AppState>) -> TtsStateEvent {
-    state.tts.pause();
-    state.media_keys.update_status(None, false, true);
-    state.tts.current_state_event()
+pub async fn tts_pause(state: State<'_, AppState>) -> Result<TtsStateEvent, String> {
+    let tts = Arc::clone(&state.tts);
+    let media_keys = Arc::clone(&state.media_keys);
+    tokio::task::spawn_blocking(move || {
+        tts.pause();
+        media_keys.update_status(None, false, true);
+        tts.current_state_event()
+    })
+    .await
+    .map_err(|e| format!("Failed joining tts_pause task: {e}"))
 }
 
 #[tauri::command]
-pub fn tts_step_sentence(state: State<'_, AppState>, delta: isize) -> TtsStateEvent {
-    state.tts.step_sentence(delta);
-    state.tts.current_state_event()
+pub async fn tts_step_sentence(
+    state: State<'_, AppState>,
+    delta: isize,
+) -> Result<TtsStateEvent, String> {
+    let tts = Arc::clone(&state.tts);
+    tokio::task::spawn_blocking(move || {
+        tts.step_sentence(delta);
+        tts.current_state_event()
+    })
+    .await
+    .map_err(|e| format!("Failed joining tts_step_sentence task: {e}"))
+}
+
+#[tauri::command]
+pub async fn get_tts_state(state: State<'_, AppState>) -> Result<TtsStateEvent, String> {
+    let tts = Arc::clone(&state.tts);
+    tokio::task::spawn_blocking(move || tts.current_state_event())
+        .await
+        .map_err(|e| format!("Failed joining get_tts_state task: {e}"))
 }
 
 #[tauri::command]

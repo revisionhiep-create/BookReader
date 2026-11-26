@@ -478,6 +478,22 @@ html[data-platform="android"] .toc-mobile-tabs {
     font-variant-numeric: tabular-nums;
     font-size: 12.5px;
   }
+
+  html[data-platform="android"] .library-search-bar {
+    padding: 10px 14px;
+  }
+
+  html[data-platform="android"] .library-search-wrap input {
+    min-height: 42px;
+    font-size: 14px;
+    padding: 9px 40px 9px 36px;
+  }
+
+  html[data-platform="android"] .library-search-clear {
+    width: 34px;
+    height: 34px;
+    right: 4px;
+  }
 }
 
 /* ==========================================================================

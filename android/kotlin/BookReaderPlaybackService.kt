@@ -118,9 +118,7 @@ class BookReaderPlaybackService : Service() {
             acquireWakeLockInternal()
         } else {
             releaseWakeLockInternal()
-            if (!paused) {
-                abandonAudioFocus()
-            }
+            abandonAudioFocus()
         }
 
         val stateCode = when {

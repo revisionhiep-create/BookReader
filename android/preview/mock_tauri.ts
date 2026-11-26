@@ -161,7 +161,43 @@ export function installPreviewMock(): void {
     bookmarks: [],
   };
 
-  let library: BookMeta[] = [book1, book2];
+  const book3: BookMeta = {
+    id: "preview-blacksmith",
+    title: "A Mythic-Grade Blacksmith Devours the Tower",
+    format: "epub",
+    stored_filename: "preview-blacksmith.epub",
+    original_filename: "Mythic_Blacksmith_Ch1-80.epub",
+    added_at: 1759800000,
+    last_opened_at: 1759850000,
+    current_sentence_idx: 24,
+    current_page: 1,
+    scroll_y: 0,
+    total_sentences: 120,
+    total_words: 1840,
+    pdf_header_ignore_pct: 0.06,
+    pdf_footer_ignore_pct: 0.06,
+    bookmarks: [],
+  };
+
+  const book4: BookMeta = {
+    id: "preview-manual",
+    title: "Magitech Architecture Reference",
+    format: "pdf",
+    stored_filename: "preview-manual.pdf",
+    original_filename: "magitech_architecture.pdf",
+    added_at: 1759700000,
+    last_opened_at: 1759750000,
+    current_sentence_idx: 12,
+    current_page: 3,
+    scroll_y: 0,
+    total_sentences: 64,
+    total_words: 980,
+    pdf_header_ignore_pct: 0.06,
+    pdf_footer_ignore_pct: 0.06,
+    bookmarks: [],
+  };
+
+  let library: BookMeta[] = [book1, book2, book3, book4];
   let voices = buildSampleVoices();
   let pronunciations: PronunciationRule[] = [
     {
@@ -434,6 +470,8 @@ export function installPreviewMock(): void {
           playing = false;
           stopSim();
           return buildTtsState(false) as T;
+        case "get_tts_state":
+          return buildTtsState(true) as T;
         case "tts_preview_text":
           return undefined as T;
         case "validate_rule_regex":

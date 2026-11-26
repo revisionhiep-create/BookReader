@@ -56,6 +56,12 @@ class MainActivity : TauriActivity() {
     appContext = applicationContext
     BookReaderPlaybackService.initAppContext(applicationContext)
     ensureNativeBound()
+    notifyLifecycle(true)
+  }
+
+  override fun onPause() {
+    notifyLifecycle(false)
+    super.onPause()
   }
 
   private fun requestNotificationsPermissionIfNeeded() {
@@ -81,6 +87,13 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  private fun notifyLifecycle(foreground: Boolean) {
+    try {
+      nativeOnAppLifecycle(foreground)
+    } catch (_: UnsatisfiedLinkError) {
+    }
+  }
+
   companion object {
     @Volatile
     private var appContext: Context? = null
@@ -90,6 +103,9 @@ class MainActivity : TauriActivity() {
 
     @JvmStatic
     external fun nativeBindApp(activity: MainActivity)
+
+    @JvmStatic
+    external fun nativeOnAppLifecycle(foreground: Boolean)
 
     @JvmStatic
     fun copyContentUriToCache(uriString: String, destDirPath: String): String {

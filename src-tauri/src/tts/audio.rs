@@ -270,18 +270,26 @@ struct AudioShared {
     state: Mutex<QueueState>,
     paused: AtomicBool,
     generation: AtomicU64,
+    resume_epoch: AtomicU64,
     volume_bits: AtomicU32,
     speed_bits: AtomicU32,
     device_sample_rate: AtomicU32,
     output_ready: AtomicBool,
+    stream_broken: AtomicBool,
     last_error: Mutex<Option<String>>,
+}
+
+enum AudioCommand {
+    EnsureReady(std::sync::mpsc::SyncSender<Result<(), String>>),
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    SuspendIfPaused(u64),
 }
 
 /// Handle to the background `cpal` audio playback stream.
 pub struct AudioOutput {
     shared: Arc<AudioShared>,
     stretcher: WsolaStretcher,
-    retry_tx: Option<std::sync::mpsc::SyncSender<std::sync::mpsc::SyncSender<Result<(), String>>>>,
+    cmd_tx: Option<std::sync::mpsc::SyncSender<AudioCommand>>,
 }
 
 impl AudioOutput {
@@ -293,23 +301,23 @@ impl AudioOutput {
             state: Mutex::new(QueueState::default()),
             paused: AtomicBool::new(true),
             generation: AtomicU64::new(1),
+            resume_epoch: AtomicU64::new(0),
             volume_bits: AtomicU32::new(initial_volume.clamp(0.0, 1.0).to_bits()),
             speed_bits: AtomicU32::new(initial_speed.clamp(0.5, 3.0).to_bits()),
             device_sample_rate: AtomicU32::new(48_000),
             output_ready: AtomicBool::new(false),
+            stream_broken: AtomicBool::new(false),
             last_error: Mutex::new(None),
         });
 
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(1);
-        let (retry_tx, retry_rx) = std::sync::mpsc::sync_channel::<
-            std::sync::mpsc::SyncSender<Result<(), String>>,
-        >(4);
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::sync_channel::<AudioCommand>(8);
         let thread_shared = Arc::clone(&shared);
 
         std::thread::Builder::new()
             .name("bookreader-audio".to_string())
             .spawn(move || {
-                run_audio_thread(thread_shared, ready_tx, retry_rx);
+                run_audio_thread(thread_shared, ready_tx, cmd_rx);
             })
             .map_err(|e| format!("Failed spawning audio thread: {e}"))?;
 
@@ -320,7 +328,7 @@ impl AudioOutput {
         Ok(Self {
             shared,
             stretcher: WsolaStretcher::new(MODEL_SAMPLE_RATE),
-            retry_tx: Some(retry_tx),
+            cmd_tx: Some(cmd_tx),
         })
     }
 
@@ -331,35 +339,55 @@ impl AudioOutput {
                 state: Mutex::new(QueueState::default()),
                 paused: AtomicBool::new(true),
                 generation: AtomicU64::new(1),
+                resume_epoch: AtomicU64::new(0),
                 volume_bits: AtomicU32::new(initial_volume.clamp(0.0, 1.0).to_bits()),
                 speed_bits: AtomicU32::new(initial_speed.clamp(0.5, 3.0).to_bits()),
                 device_sample_rate: AtomicU32::new(48_000),
                 output_ready: AtomicBool::new(false),
+                stream_broken: AtomicBool::new(false),
                 last_error: Mutex::new(None),
             }),
             stretcher: WsolaStretcher::new(MODEL_SAMPLE_RATE),
-            retry_tx: None,
+            cmd_tx: None,
         }
     }
 
     pub fn is_output_ready(&self) -> bool {
         self.shared.output_ready.load(Ordering::Acquire)
+            && !self.shared.stream_broken.load(Ordering::Acquire)
     }
 
-    /// Ensures the OS audio output stream is open, retrying initialization if no device was ready at launch.
+    /// Ensures the OS audio output stream is open, retrying initialization if no device was ready at launch
+    /// or recreating a stream that was closed on pause / invalidated by the OS audio server.
     pub fn ensure_stream_ready(&self) -> Result<(), String> {
+        self.shared.resume_epoch.fetch_add(1, Ordering::AcqRel);
         if self.is_output_ready() {
             return Ok(());
         }
-        let Some(ref tx) = self.retry_tx else {
+        let Some(ref tx) = self.cmd_tx else {
             return Err("No audio output device available".to_string());
         };
         let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
-        tx.send(ack_tx)
+        tx.send(AudioCommand::EnsureReady(ack_tx))
             .map_err(|_| "Audio thread is not running".to_string())?;
-        ack_rx
-            .recv()
-            .map_err(|_| "Audio thread did not respond".to_string())?
+        match ack_rx.recv_timeout(std::time::Duration::from_secs(6)) {
+            Ok(res) => res,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                Err("Audio output device timed out while starting".to_string())
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err("Audio thread did not respond".to_string())
+            }
+        }
+    }
+
+    /// Releases the OS audio output stream when paused so background sleep cannot stale or block AAudio.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn suspend_if_paused(&self) {
+        if let Some(ref tx) = self.cmd_tx {
+            let epoch = self.shared.resume_epoch.load(Ordering::Acquire);
+            let _ = tx.try_send(AudioCommand::SuspendIfPaused(epoch));
+        }
     }
 
     pub fn generation(&self) -> u64 {
@@ -382,6 +410,7 @@ impl AudioOutput {
             guard.anchor = None;
         } else {
             guard.anchor = None;
+            self.shared.resume_epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.shared.paused.store(paused, Ordering::Release);
     }
@@ -529,50 +558,79 @@ fn open_output_stream(shared: &Arc<AudioShared>) -> Result<cpal::Stream, String>
 fn run_audio_thread(
     shared: Arc<AudioShared>,
     ready_tx: std::sync::mpsc::SyncSender<()>,
-    retry_rx: std::sync::mpsc::Receiver<std::sync::mpsc::SyncSender<Result<(), String>>>,
+    cmd_rx: std::sync::mpsc::Receiver<AudioCommand>,
 ) {
+    #[cfg(not(target_os = "android"))]
     let mut active_stream: Option<cpal::Stream> = match open_output_stream(&shared) {
         Ok(stream) => {
             shared.output_ready.store(true, Ordering::Release);
+            shared.stream_broken.store(false, Ordering::Release);
             *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
             Some(stream)
         }
         Err(err) => {
             tracing::warn!(error = %err, "Audio output unavailable at startup; entering standby mode");
             shared.output_ready.store(false, Ordering::Release);
+            shared.stream_broken.store(false, Ordering::Release);
             *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
             None
         }
     };
+    #[cfg(target_os = "android")]
+    let mut active_stream: Option<cpal::Stream> = {
+        // On Android, keep AAudio closed until playback or preview is requested.
+        shared.output_ready.store(false, Ordering::Release);
+        shared.stream_broken.store(false, Ordering::Release);
+        None
+    };
 
     let _ = ready_tx.send(());
 
-    if active_stream.is_none() {
-        while let Ok(ack_tx) = retry_rx.recv() {
-            match open_output_stream(&shared) {
-                Ok(stream) => {
-                    shared.output_ready.store(true, Ordering::Release);
-                    *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                    active_stream = Some(stream);
+    // Keep the !Send cpal::Stream alive on this dedicated thread while handling reopen/suspend commands.
+    while let Ok(cmd) = cmd_rx.recv() {
+        match cmd {
+            AudioCommand::EnsureReady(ack_tx) => {
+                if active_stream.is_some() && !shared.stream_broken.load(Ordering::Acquire) {
                     let _ = ack_tx.send(Ok(()));
-                    break;
+                    continue;
                 }
-                Err(err) => {
+                active_stream = None;
+                shared.output_ready.store(false, Ordering::Release);
+                shared.stream_broken.store(false, Ordering::Release);
+
+                let attempt = open_output_stream(&shared).or_else(|first_err| {
+                    tracing::warn!(error = %first_err, "Audio open failed; retrying once");
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    open_output_stream(&shared)
+                });
+                match attempt {
+                    Ok(stream) => {
+                        shared.output_ready.store(true, Ordering::Release);
+                        shared.stream_broken.store(false, Ordering::Release);
+                        *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                        active_stream = Some(stream);
+                        let _ = ack_tx.send(Ok(()));
+                    }
+                    Err(err) => {
+                        shared.output_ready.store(false, Ordering::Release);
+                        shared.stream_broken.store(false, Ordering::Release);
+                        *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(err.clone());
+                        let _ = ack_tx.send(Err(err));
+                    }
+                }
+            }
+            AudioCommand::SuspendIfPaused(epoch) => {
+                if shared.paused.load(Ordering::Acquire)
+                    && shared.resume_epoch.load(Ordering::Acquire) == epoch
+                    && active_stream.is_some()
+                {
+                    active_stream = None;
                     shared.output_ready.store(false, Ordering::Release);
-                    *shared.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.clone());
-                    let _ = ack_tx.send(Err(err));
+                    shared.stream_broken.store(false, Ordering::Release);
                 }
             }
         }
-    }
-
-    if active_stream.is_none() {
-        return;
-    }
-
-    // Keep the !Send cpal::Stream alive on this dedicated thread for app lifetime
-    while let Ok(ack_tx) = retry_rx.recv() {
-        let _ = ack_tx.send(Ok(()));
     }
 }
 
@@ -588,6 +646,7 @@ where
     let out_rate = config.sample_rate.max(8000) as f64;
     let step_24k = MODEL_SAMPLE_RATE as f64 / out_rate;
     let mut smoothed_latency: Option<f64> = None;
+    let err_shared = Arc::clone(&shared);
 
     device
         .build_output_stream(
@@ -599,8 +658,10 @@ where
                 smoothed_latency = Some(latency_sec);
                 fill_output_buffer(data, channels, step_24k, latency_sec, &shared);
             },
-            |err| {
-                tracing::warn!(error = %err, "Audio stream error");
+            move |err| {
+                tracing::warn!(error = %err, "Audio stream error; marking stream for recovery");
+                err_shared.stream_broken.store(true, Ordering::Release);
+                err_shared.output_ready.store(false, Ordering::Release);
             },
             None,
         )
@@ -892,5 +953,20 @@ mod tests {
         let after = out.snapshot();
         assert!(after.playback_ms >= 150, "expected >= 150ms, got {}", after.playback_ms);
         assert_eq!(after.word_idx, 1);
+    }
+
+    #[test]
+    fn stream_broken_invalidates_output_ready_and_headless_suspend_is_safe() {
+        let out = AudioOutput::new_headless(1.0, 1.0);
+        assert!(!out.is_output_ready());
+        out.shared.output_ready.store(true, Ordering::Release);
+        assert!(out.is_output_ready());
+        out.shared.stream_broken.store(true, Ordering::Release);
+        assert!(!out.is_output_ready());
+        out.suspend_if_paused();
+
+        let epoch_before = out.shared.resume_epoch.load(Ordering::Acquire);
+        out.set_paused(false);
+        assert!(out.shared.resume_epoch.load(Ordering::Acquire) > epoch_before);
     }
 }

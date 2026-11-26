@@ -5,6 +5,8 @@ export class RichViewer {
   private container: HTMLElement;
   private renderedBookId: string | null = null;
   private activeSid: number | null = null;
+  private sentElements: Map<number, HTMLElement> = new Map();
+  private highlightedSearchEls: Set<HTMLElement> = new Set();
   private onSentenceClick: (sid: number) => void;
 
   constructor(container: HTMLElement, onSentenceClick: (sid: number) => void) {
@@ -15,12 +17,16 @@ export class RichViewer {
   public clear(): void {
     this.renderedBookId = null;
     this.activeSid = null;
+    this.sentElements.clear();
+    this.highlightedSearchEls.clear();
     this.container.innerHTML = "";
   }
 
   public mountDocument(payload: DocumentPayload): void {
     this.renderedBookId = payload.book.id;
     this.activeSid = null;
+    this.sentElements.clear();
+    this.highlightedSearchEls.clear();
 
     const prose = document.createElement("article");
     prose.className = "br-prose";
@@ -30,6 +36,13 @@ export class RichViewer {
       .map((ch) => `<section class="br-chapter">${ch.html}</section>`)
       .join("\n<hr/>\n");
     prose.innerHTML = chaptersHtml || "<p>No readable text found in this document.</p>";
+
+    prose.querySelectorAll<HTMLElement>(".br-sent").forEach((el) => {
+      const sid = Number(el.dataset.sid);
+      if (Number.isFinite(sid) && !this.sentElements.has(sid)) {
+        this.sentElements.set(sid, el);
+      }
+    });
 
     prose.addEventListener("click", (e) => {
       const span = (e.target as HTMLElement | null)?.closest<HTMLElement>(".br-sent");
@@ -65,18 +78,14 @@ export class RichViewer {
     if (!this.renderedBookId) return;
 
     if (this.activeSid !== null && this.activeSid !== sentenceIdx) {
-      const prev = this.container.querySelector<HTMLElement>(
-        `.br-sent[data-sid="${this.activeSid}"]`,
-      );
+      const prev = this.sentElements.get(this.activeSid);
       if (prev) {
         prev.classList.remove("active");
         prev.removeAttribute("data-active-sid");
       }
     }
 
-    const cur = this.container.querySelector<HTMLElement>(
-      `.br-sent[data-sid="${sentenceIdx}"]`,
-    );
+    const cur = this.sentElements.get(sentenceIdx);
     if (cur) {
       cur.classList.add("active");
       cur.setAttribute("data-active-sid", "true");
@@ -84,21 +93,25 @@ export class RichViewer {
     this.activeSid = sentenceIdx;
 
     // Sync search highlight hits and focused search match separately from playback cursor
-    this.container.querySelectorAll(".br-sent.search-hit, .br-sent.search-focus").forEach((el) => {
+    this.highlightedSearchEls.forEach((el) => {
       el.classList.remove("search-hit", "search-focus");
       el.removeAttribute("data-search-focus");
     });
+    this.highlightedSearchEls.clear();
+
     for (const hitSid of state.searchHits) {
-      const el = this.container.querySelector<HTMLElement>(`.br-sent[data-sid="${hitSid}"]`);
-      if (el) el.classList.add("search-hit");
+      const el = this.sentElements.get(hitSid);
+      if (el) {
+        el.classList.add("search-hit");
+        this.highlightedSearchEls.add(el);
+      }
     }
     if (state.searchFocusedSid !== null) {
-      const focusEl = this.container.querySelector<HTMLElement>(
-        `.br-sent[data-sid="${state.searchFocusedSid}"]`,
-      );
+      const focusEl = this.sentElements.get(state.searchFocusedSid);
       if (focusEl) {
         focusEl.classList.add("search-focus");
         focusEl.setAttribute("data-search-focus", "true");
+        this.highlightedSearchEls.add(focusEl);
       }
     }
   }

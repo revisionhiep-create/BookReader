@@ -1167,6 +1167,63 @@ html[data-theme="dark"] .pdf-page-card.dark-invert canvas {
   border-color: var(--border-strong);
 }
 
+.library-search-bar {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-toolbar);
+  flex-shrink: 0;
+}
+
+.library-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.library-search-icon {
+  position: absolute;
+  left: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.library-search-wrap input {
+  width: 100%;
+  padding: 8px 34px 8px 35px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+.library-search-wrap input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.library-search-clear {
+  position: absolute;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.library-search-clear.hidden {
+  display: none;
+}
+
+.library-empty-search {
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
 .setting-group {
   padding: 12px;
   border-radius: 8px;

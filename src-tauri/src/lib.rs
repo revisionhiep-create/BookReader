@@ -134,6 +134,7 @@ pub fn run() {
             commands::tts_toggle_play_pause,
             commands::tts_pause,
             commands::tts_step_sentence,
+            commands::get_tts_state,
             commands::tts_preview_text,
             commands::start_audio_export,
             commands::cancel_audio_export,

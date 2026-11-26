@@ -133,6 +133,13 @@ impl TtsController {
         )
     }
 
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn suspend_audio_if_paused(&self) {
+        if !self.is_actively_playing() {
+            self.audio.suspend_if_paused();
+        }
+    }
+
     pub fn ensure_model_loaded(&self) -> Result<(), String> {
         self.engine.ensure_loaded(self.storage.paths())
     }
@@ -659,11 +666,40 @@ impl TtsController {
         let mut last_emitted_at = Instant::now();
         let mut last_emitted_state: Option<(String, usize, usize)> = None;
         let mut last_sent_timeline: Option<(usize, u32, usize, bool)> = None;
+        let mut last_recovery_attempt: Option<Instant> = None;
+        #[cfg(target_os = "android")]
+        let mut paused_since: Option<Instant> = None;
         #[cfg(target_os = "android")]
         let mut last_notified_status: Option<String> = None;
 
         loop {
-            std::thread::sleep(Duration::from_millis(20));
+            let active_transport = {
+                let s = self.session.read().unwrap();
+                s.preview_active
+                    || matches!(
+                        s.transport,
+                        TransportState::Playing | TransportState::Loading
+                    )
+            };
+            std::thread::sleep(Duration::from_millis(if active_transport { 20 } else { 120 }));
+
+            let should_recover_stream = {
+                let s = self.session.read().unwrap();
+                matches!(s.transport, TransportState::Playing) && !self.audio.is_output_ready()
+            };
+            if should_recover_stream
+                && last_recovery_attempt
+                    .map_or(true, |t| t.elapsed() >= Duration::from_millis(1500))
+            {
+                last_recovery_attempt = Some(Instant::now());
+                if let Err(err) = self.audio.ensure_stream_ready() {
+                    self.audio.set_paused(true);
+                    let mut s = self.session.write().unwrap();
+                    if matches!(s.transport, TransportState::Playing) {
+                        s.transport = TransportState::Error(err);
+                    }
+                }
+            }
 
             let snap = self.audio.snapshot();
             let target_prefetch = prefetch_target_for_voice(&self.storage.settings().voice_id);
@@ -714,6 +750,21 @@ impl TtsController {
             }
 
             let preview_evt = self.build_state_event(&snap, false);
+
+            #[cfg(target_os = "android")]
+            {
+                if matches!(preview_evt.status.as_str(), "paused" | "idle") {
+                    let since = paused_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= Duration::from_secs(5) && self.audio.is_output_ready() {
+                        self.audio.suspend_if_paused();
+                    }
+                } else {
+                    paused_since = None;
+                }
+            }
+
+            let in_fg = crate::media_keys::is_app_in_foreground();
+            let resume_sync = in_fg && crate::media_keys::take_resume_sync_needed();
             let key = (
                 preview_evt.status.clone(),
                 preview_evt.sentence_idx,
@@ -733,9 +784,11 @@ impl TtsController {
             let sync_due = matches!(preview_evt.status.as_str(), "playing" | "loading")
                 && last_emitted_at.elapsed() >= Duration::from_millis(120);
 
-            if changed || timeline_changed || sync_due {
-                let evt = if timeline_changed {
-                    last_sent_timeline = Some(timeline_key);
+            if changed || timeline_changed || sync_due || resume_sync {
+                let evt = if timeline_changed || resume_sync {
+                    if timeline_changed {
+                        last_sent_timeline = Some(timeline_key);
+                    }
                     self.build_state_event(&snap, true)
                 } else {
                     if !is_playing_now {
@@ -743,7 +796,9 @@ impl TtsController {
                     }
                     preview_evt
                 };
-                let _ = app.emit("tts:state", &evt);
+                if in_fg {
+                    let _ = app.emit("tts:state", &evt);
+                }
                 #[cfg(target_os = "android")]
                 if last_notified_status.as_deref() != Some(evt.status.as_str()) {
                     let playing = matches!(evt.status.as_str(), "playing" | "loading");

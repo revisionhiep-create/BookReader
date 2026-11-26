@@ -10,7 +10,7 @@ import {
 import { invoke, listen } from "./tauri_bridge";
 import { renderCcBar, resetCcClockForSeek, syncCcPlaybackClock } from "./components/cc_bar";
 import { renderExportModal } from "./components/export_modal";
-import { pickAndImportBook, renderLibraryModal } from "./components/library_modal";
+import { pickAndImportBook, renderLibraryModal, resetLibrarySearch } from "./components/library_modal";
 import { PdfViewer } from "./components/pdf_viewer";
 import { RichViewer } from "./components/rich_viewer";
 import { resetRulesModalDraft, renderRulesModal } from "./components/rules_modal";
@@ -175,6 +175,8 @@ function openModal(modal: ActiveModal): void {
   state.mobileDrawerOpen = false;
   if (modal === "pronunciation" || modal === "ignore") {
     resetRulesModalDraft();
+  } else if (modal === "library") {
+    resetLibrarySearch();
   } else if (modal === "voice_clone") {
     prepareVoiceCloneModalOpen();
   }
@@ -193,6 +195,33 @@ function closeModal(): void {
   renderModal();
 }
 
+let ttsActionInFlight = false;
+
+async function runTtsAction<T>(
+  busyHint: string | null,
+  fn: () => Promise<T>,
+): Promise<T | null> {
+  if (ttsActionInFlight) return null;
+  ttsActionInFlight = true;
+  let hintTimer: number | undefined;
+  let showedBusy = false;
+  if (busyHint) {
+    hintTimer = window.setTimeout(() => {
+      showedBusy = true;
+      setBusyLoading(busyHint);
+    }, 180);
+  }
+  try {
+    return await fn();
+  } finally {
+    if (hintTimer !== undefined) window.clearTimeout(hintTimer);
+    if (showedBusy && busyLoadingMessage === busyHint) {
+      setBusyLoading(null);
+    }
+    ttsActionInFlight = false;
+  }
+}
+
 async function jumpAndPlay(sentenceIdx: number): Promise<void> {
   if (!state.activeBook || state.sentences.length === 0) return;
   const clamped = Math.max(0, Math.min(sentenceIdx, state.sentences.length - 1));
@@ -201,12 +230,18 @@ async function jumpAndPlay(sentenceIdx: number): Promise<void> {
   syncActiveHighlight();
   scrollCtrl.onActiveSentenceChanged(clamped, true);
   resetCcClockForSeek();
-  try {
-    state.tts = await invoke<TtsStateEvent>("tts_play_from", { sentenceIdx: clamped });
+  const res = await runTtsAction("Waking audio engine and preparing speech...", async () => {
+    try {
+      return await invoke<TtsStateEvent>("tts_play_from", { sentenceIdx: clamped });
+    } catch (err) {
+      showToast(String(err));
+      return null;
+    }
+  });
+  if (res) {
+    state.tts = res;
     syncCcPlaybackClock(state.tts, ccHostEl);
     renderChrome();
-  } catch (err) {
-    showToast(String(err));
   }
 }
 
@@ -415,13 +450,24 @@ function getPlaybackActions() {
   return {
     onOpenModal: openModal,
     onTogglePlay: () => {
+      const willStart =
+        state.tts.status !== "playing" && state.tts.status !== "loading";
       void (async () => {
-        try {
-          state.tts = await invoke<TtsStateEvent>("tts_toggle_play_pause");
+        const res = await runTtsAction(
+          willStart ? "Waking audio engine and preparing speech..." : null,
+          async () => {
+            try {
+              return await invoke<TtsStateEvent>("tts_toggle_play_pause");
+            } catch (err) {
+              showToast(String(err));
+              return null;
+            }
+          },
+        );
+        if (res) {
+          state.tts = res;
           syncCcPlaybackClock(state.tts, ccHostEl);
           renderChrome();
-        } catch (err) {
-          showToast(String(err));
         }
       })();
     },
@@ -775,6 +821,32 @@ document.addEventListener("click", () => {
   }
 });
 
+let visibilitySyncInFlight = false;
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !state.bootstrap || visibilitySyncInFlight) return;
+  visibilitySyncInFlight = true;
+  void (async () => {
+    try {
+      const evt = await invoke<TtsStateEvent>("get_tts_state");
+      const prevSid = state.tts.sentence_idx;
+      const sameBook = Boolean(state.activeBook && evt.book_id === state.activeBook.id);
+      state.tts = evt;
+      syncCcPlaybackClock(evt, ccHostEl);
+      syncLoadingBanner();
+      if (sameBook && prevSid !== evt.sentence_idx) {
+        syncActiveHighlight();
+        scrollCtrl.onActiveSentenceChanged(evt.sentence_idx);
+      }
+      renderChrome();
+    } catch {
+      // Ignore transient visibility sync errors while WebView resumes
+    } finally {
+      visibilitySyncInFlight = false;
+    }
+  })();
+});
+
 subscribe(() => {
   pdfViewer.syncDarkInvert();
 });
@@ -806,6 +878,15 @@ window.addEventListener("keydown", (e) => {
       target.isContentEditable);
 
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+    if (state.activeModal === "library") {
+      e.preventDefault();
+      const libInput = modalHostEl.querySelector<HTMLInputElement>("#library-search-input");
+      if (libInput) {
+        libInput.focus();
+        libInput.select();
+      }
+      return;
+    }
     if (state.activeBook && state.activeModal === null) {
       e.preventDefault();
       state.searchOpen = true;
@@ -858,13 +939,24 @@ window.addEventListener("keydown", (e) => {
 
   if (e.code === "Space") {
     e.preventDefault();
+    const willStart =
+      state.tts.status !== "playing" && state.tts.status !== "loading";
     void (async () => {
-      try {
-        state.tts = await invoke<TtsStateEvent>("tts_toggle_play_pause");
+      const res = await runTtsAction(
+        willStart ? "Waking audio engine and preparing speech..." : null,
+        async () => {
+          try {
+            return await invoke<TtsStateEvent>("tts_toggle_play_pause");
+          } catch (err) {
+            showToast(String(err));
+            return null;
+          }
+        },
+      );
+      if (res) {
+        state.tts = res;
         syncCcPlaybackClock(state.tts, ccHostEl);
         renderChrome();
-      } catch (err) {
-        showToast(String(err));
       }
     })();
   } else if (e.key === "ArrowLeft") {

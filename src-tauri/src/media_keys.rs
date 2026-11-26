@@ -96,6 +96,14 @@ static ANDROID_TTS: OnceLock<Arc<TtsController>> = OnceLock::new();
 static ANDROID_LAST_TITLE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 #[cfg(target_os = "android")]
+static ANDROID_APP_FOREGROUND: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+#[cfg(target_os = "android")]
+static ANDROID_RESUME_SYNC_NEEDED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "android")]
 pub struct MediaKeysBridge;
 
 #[cfg(target_os = "android")]
@@ -133,6 +141,7 @@ mod android_jni {
     static JVM: OnceLock<jni::JavaVM> = OnceLock::new();
     static MAIN_ACTIVITY_CLASS: OnceLock<GlobalRef> = OnceLock::new();
     static PLAYBACK_SERVICE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+    static MEDIA_ACTION_TX: OnceLock<std::sync::mpsc::SyncSender<jint>> = OnceLock::new();
 
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_bookreader_android_MainActivity_nativeBindApp(
@@ -225,29 +234,57 @@ mod android_jni {
     }
 
     #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_bookreader_android_MainActivity_nativeOnAppLifecycle(
+        _env: JNIEnv,
+        _class: JClass,
+        foreground: jni::sys::jboolean,
+    ) {
+        let in_fg = foreground != 0;
+        super::ANDROID_APP_FOREGROUND.store(in_fg, std::sync::atomic::Ordering::Release);
+        if in_fg {
+            super::ANDROID_RESUME_SYNC_NEEDED.store(true, std::sync::atomic::Ordering::Release);
+        } else if let Some(tts) = ANDROID_TTS.get() {
+            if !tts.is_actively_playing() {
+                tts.suspend_audio_if_paused();
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_bookreader_android_BookReaderPlaybackService_nativeOnMediaAction(
         _env: JNIEnv,
         _class: JClass,
         action: jint,
     ) {
-        let Some(tts) = ANDROID_TTS.get() else {
-            return;
-        };
-        match action {
-            0 => tts.resume(),
-            1 => tts.pause(),
-            2 => tts.toggle_play_pause(),
-            3 => tts.step_sentence(1),
-            4 => tts.step_sentence(-1),
-            _ => {}
-        }
-        if matches!(action, 0 | 1 | 2) {
-            let evt = tts.current_state_event();
-            super::sync_android_playback_status(
-                matches!(evt.status.as_str(), "playing" | "loading"),
-                evt.status == "paused",
-            );
-        }
+        let tx = MEDIA_ACTION_TX.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<jint>(16);
+            let _ = std::thread::Builder::new()
+                .name("bookreader-media-action".to_string())
+                .spawn(move || {
+                    while let Ok(act) = rx.recv() {
+                        let Some(tts) = ANDROID_TTS.get() else {
+                            continue;
+                        };
+                        match act {
+                            0 => tts.resume(),
+                            1 => tts.pause(),
+                            2 => tts.toggle_play_pause(),
+                            3 => tts.step_sentence(1),
+                            4 => tts.step_sentence(-1),
+                            _ => {}
+                        }
+                        if matches!(act, 0 | 1 | 2) {
+                            let evt = tts.current_state_event();
+                            super::sync_android_playback_status(
+                                matches!(evt.status.as_str(), "playing" | "loading"),
+                                evt.status == "paused",
+                            );
+                        }
+                    }
+                });
+            tx
+        });
+        let _ = tx.try_send(action);
     }
 
     fn playback_service_class<'local>(env: &mut JNIEnv<'local>) -> Option<JClass<'local>> {
@@ -336,4 +373,24 @@ pub fn set_android_wake_lock(hold: bool) {
 #[cfg(target_os = "android")]
 pub fn copy_android_content_uri(uri: &str, dest_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
     android_jni::copy_content_uri_to_cache(uri, dest_dir)
+}
+
+#[cfg(target_os = "android")]
+pub fn is_app_in_foreground() -> bool {
+    ANDROID_APP_FOREGROUND.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn is_app_in_foreground() -> bool {
+    true
+}
+
+#[cfg(target_os = "android")]
+pub fn take_resume_sync_needed() -> bool {
+    ANDROID_RESUME_SYNC_NEEDED.swap(false, std::sync::atomic::Ordering::AcqRel)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn take_resume_sync_needed() -> bool {
+    false
 }
