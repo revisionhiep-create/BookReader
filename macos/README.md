@@ -6,8 +6,8 @@ This folder holds macOS-specific Tauri configuration, portable `.dmg` packaging 
 
 From [GitHub Releases](https://github.com/revisionhiep-create/BookReader/releases/latest):
 
-- **Apple Silicon (M1 / M2 / M3 / M4 / M5)**: `BookReader-1.1.0-macos-arm64-portable.dmg` (uses Apple Metal GPU + Accelerate)
-- **Intel Macs (x64)**: `BookReader-1.1.0-macos-x64-portable.dmg` (uses Apple Accelerate CPU)
+- **Apple Silicon (M1 / M2 / M3 / M4 / M5)**: `BookReader-macos-arm64-portable.dmg` (uses Apple Metal GPU + Accelerate)
+- **Intel Macs (x64)**: `BookReader-macos-x64-portable.dmg` (uses Apple Accelerate CPU)
 
 ## Quick Start for macOS Users
 
@@ -36,6 +36,6 @@ From [GitHub Releases](https://github.com/revisionhiep-create/BookReader/release
 ```bash
 npm install
 chmod +x macos/*.sh
-./macos/build_portable_dmg.sh aarch64-apple-darwin BookReader-1.1.0-macos-arm64-portable.dmg
-./macos/test_macos_features.sh aarch64-apple-darwin BookReader-1.1.0-macos-arm64-portable.dmg
+./macos/build_portable_dmg.sh aarch64-apple-darwin BookReader-macos-arm64-portable.dmg
+./macos/test_macos_features.sh aarch64-apple-darwin BookReader-macos-arm64-portable.dmg
 ```
