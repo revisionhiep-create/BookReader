@@ -27,11 +27,9 @@ jobs:
           - arch: arm64
             runner: macos-15
             target: aarch64-apple-darwin
-            dmg: BookReader-1.1.0-macos-arm64-portable.dmg
           - arch: x64
             runner: macos-15-intel
             target: x86_64-apple-darwin
-            dmg: BookReader-1.1.0-macos-x64-portable.dmg
 
     steps:
       - name: Checkout repository
@@ -42,6 +40,13 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+
+      - name: Resolve app version
+        id: meta
+        run: |
+          VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "dmg=BookReader-${VERSION}-macos-${{ matrix.arch }}-portable.dmg" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
@@ -60,16 +65,16 @@ jobs:
       - name: Build portable macOS .app and .dmg
         run: |
           chmod +x macos/*.sh
-          ./macos/build_portable_dmg.sh "${{ matrix.target }}" "${{ matrix.dmg }}"
+          ./macos/build_portable_dmg.sh "${{ matrix.target }}" "${{ steps.meta.outputs.dmg }}"
 
       - name: Test all macOS features & mounted DMG behavior
-        run: ./macos/test_macos_features.sh "${{ matrix.target }}" "${{ matrix.dmg }}"
+        run: ./macos/test_macos_features.sh "${{ matrix.target }}" "${{ steps.meta.outputs.dmg }}"
 
       - name: Upload portable macOS DMG artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-${{ matrix.arch }}
-          path: macos/dist/${{ matrix.dmg }}
+          path: macos/dist/${{ steps.meta.outputs.dmg }}
           if-no-files-found: error
 
   publish-release:
@@ -108,6 +113,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          VERSION="$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
           cat > release-notes.md <<EOF
           ## BookReader ${TAG}
 
@@ -115,8 +121,8 @@ jobs:
 
           ### Downloads
           - **Windows (x64 Portable)**: \`BookReader.exe\` — place in its own folder (creates \`BookReader_Data/\` next to it). See [windows/README.md](windows/README.md).
-          - **macOS Apple Silicon (M1–M4, Portable)**: \`BookReader-1.1.0-macos-arm64-portable.dmg\` — drag \`BookReader.app\` into its own folder (creates \`BookReader_Data/\` next to it). See [macos/README.md](macos/README.md).
-          - **macOS Intel (x64, Portable)**: \`BookReader-1.1.0-macos-x64-portable.dmg\` — drag \`BookReader.app\` into its own folder.
+          - **macOS Apple Silicon (M1–M4, Portable)**: \`BookReader-${VERSION}-macos-arm64-portable.dmg\` — drag \`BookReader.app\` into its own folder (creates \`BookReader_Data/\` next to it). See [macos/README.md](macos/README.md).
+          - **macOS Intel (x64, Portable)**: \`BookReader-${VERSION}-macos-x64-portable.dmg\` — drag \`BookReader.app\` into its own folder.
           - **Android (Phones & Tablets, Signed APK)**: \`BookReader-android-arm64.apk\` — registered & signed for normal sideloading without Developer Mode. See [android/README.md](android/README.md).
 
           > **First-launch note:** Windows and macOS standalone builds are unsigned (on Windows click **More info → Run anyway**; on macOS **Right-click → Open** or run \`xattr -cr BookReader.app\`). On Android, allow **"Install unknown apps"** for your browser/file manager if prompted.
