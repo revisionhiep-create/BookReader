@@ -4,15 +4,15 @@ A self-contained cross-platform (**Windows**, **macOS**, & **Android**) text-to-
 
 No Python runtime, account, or cloud TTS API is required — models and voices download locally into a portable `BookReader_Data/` folder right next to `BookReader.exe` (Windows) or `BookReader.app` (macOS), or privately inside Android app storage.
 
-**[Download Windows (`BookReader.exe`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · **[Download macOS Apple Silicon (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-macos-arm64-portable.dmg)** · **[Download macOS Intel (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-macos-x64-portable.dmg)** · **[Download Android (`.apk`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-android-arm64.apk)** · [View Releases](https://github.com/revisionhiep-create/BookReader/releases/latest) · **[Watch Demo](https://www.youtube.com/watch?v=424WpBSMgB8)**
+**[Download Windows (`BookReader.exe`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** · **[Download macOS Apple Silicon (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-macos-arm64-portable.dmg)** · **[Download macOS Intel (`.dmg`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-macos-x64-portable.dmg)** · **[Download Android (`.apk`)](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-android-arm64.apk)** · [View Releases](https://github.com/revisionhiep-create/BookReader/releases/latest) · **[Watch Demo](https://www.youtube.com/watch?v=rewAsJLQzTc)**
 
 ---
 
 ## Demo Video
 
-[![BookReader Demo Video](https://img.youtube.com/vi/424WpBSMgB8/maxresdefault.jpg)](https://www.youtube.com/watch?v=424WpBSMgB8)
+[![BookReader Demo Video](docs/demo-thumbnail.png)](https://www.youtube.com/watch?v=rewAsJLQzTc)
 
-Watch the demo on YouTube: **https://www.youtube.com/watch?v=424WpBSMgB8**
+Watch the demo on YouTube: **https://www.youtube.com/watch?v=rewAsJLQzTc**
 
 ---
 
