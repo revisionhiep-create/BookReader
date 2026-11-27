@@ -39,13 +39,103 @@ let quickSheetStructureKey = "";
 let mountedDockMode: null | "collapsed" | "expanded" = null;
 let dockScrubbing = false;
 
-export function attachSheetSwipeToDismiss(
-  sheetEl: HTMLElement,
-  backdropEl: HTMLElement | null,
-  onDismiss: () => void,
-): void {
+let lastDrawerOpenState = false;
+let drawerDragMode: "touch" | "mouse" | null = null;
+let drawerCloseTimer: number | null = null;
+let drawerSnapTimer: number | null = null;
+
+const DRAG_EXCLUDED_SELECTOR =
+  'input, textarea, select, [contenteditable="true"], [contenteditable=""], [data-no-swipe-dismiss]';
+
+function isDragExcludedTarget(target: EventTarget | null): boolean {
+  return Boolean(target instanceof Element && target.closest(DRAG_EXCLUDED_SELECTOR));
+}
+
+function hasScrolledAncestor(target: EventTarget | null, stopAt: HTMLElement): boolean {
+  let el: HTMLElement | null =
+    target instanceof HTMLElement
+      ? target
+      : target instanceof Node
+        ? target.parentElement
+        : null;
+  while (el) {
+    if (el.scrollHeight > el.clientHeight + 2 && el.scrollTop > 1) {
+      return true;
+    }
+    if (el === stopAt) break;
+    el = el.parentElement;
+  }
+  return false;
+}
+
+function suppressNextClick(): void {
+  let timer = 0;
+  const cleanup = () => {
+    window.clearTimeout(timer);
+    document.removeEventListener("click", clickHandler, true);
+    document.removeEventListener("pointerdown", cleanup, true);
+    document.removeEventListener("touchstart", cleanup, true);
+  };
+  const clickHandler = (ev: MouseEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    cleanup();
+  };
+  document.addEventListener("click", clickHandler, { capture: true });
+  // Release immediately if the user begins a new tap/press before the timeout expires.
+  document.addEventListener("pointerdown", cleanup, { capture: true });
+  document.addEventListener("touchstart", cleanup, { capture: true, passive: true });
+  timer = window.setTimeout(cleanup, 120);
+}
+
+function setSwipeDismissActive(active: boolean): void {
+  if (active) {
+    document.documentElement.dataset.swipeDismissActive = "1";
+  } else {
+    delete document.documentElement.dataset.swipeDismissActive;
+  }
+}
+
+function isCompactOrMediumViewport(): boolean {
+  return window.innerWidth < 840 || window.innerHeight <= 520;
+}
+
+interface VerticalSwipeTargets {
+  card: HTMLElement;
+  backdrop: HTMLElement | null;
+}
+
+interface VerticalSwipeOptions {
+  gestureRoot: HTMLElement;
+  resolveTargets: () => VerticalSwipeTargets | null;
+  canDismiss?: () => boolean;
+  onDismiss: () => void;
+  slopPx?: number;
+  slopeRatio?: number;
+  minThresholdPx?: number;
+  maxThresholdPx?: number;
+  heightFrac?: number;
+  allowImmediateHandle?: boolean;
+}
+
+function attachVerticalSwipeDismiss(opts: VerticalSwipeOptions): void {
+  const {
+    gestureRoot,
+    resolveTargets,
+    canDismiss,
+    onDismiss,
+    slopPx = 8,
+    slopeRatio = 1.15,
+    minThresholdPx = 68,
+    maxThresholdPx = 110,
+    heightFrac = 0.25,
+    allowImmediateHandle = true,
+  } = opts;
+
+  const dismissingCards = new WeakSet<HTMLElement>();
   let tracking = false;
   let dragging = false;
+  let movedBeyondSlop = false;
   let startX = 0;
   let startY = 0;
   let currentDy = 0;
@@ -55,36 +145,82 @@ export function attachSheetSwipeToDismiss(
   let lastTs = 0;
   let pointerId = -1;
   let mode: "touch" | "mouse" | null = null;
+  let startTarget: EventTarget | null = null;
+  let activeCard: HTMLElement | null = null;
+  let activeBackdrop: HTMLElement | null = null;
+  let snapBackTimer: number | null = null;
+  let snapBackCard: HTMLElement | null = null;
+  let snapBackBackdrop: HTMLElement | null = null;
 
-  const bodyEl = sheetEl.querySelector<HTMLElement>(".modal-body");
-
-  const isInteractiveTarget = (target: EventTarget | null): boolean => {
-    const el = target instanceof HTMLElement ? target : null;
-    return Boolean(el?.closest("button, a, input, select, textarea, label"));
-  };
-
-  const canStartFrom = (target: EventTarget | null, viaTouchBody = false): "immediate" | "body" | null => {
-    const el = target instanceof HTMLElement ? target : null;
-    if (!el || isInteractiveTarget(el)) return null;
-    if (el.closest(".sheet-handle") || el.closest(".modal-header")) return "immediate";
-    if (viaTouchBody && bodyEl && bodyEl.contains(el) && bodyEl.scrollTop <= 1) return "body";
-    return null;
-  };
-
-  const applyTransform = (dy: number) => {
-    currentDy = Math.max(0, dy);
-    sheetEl.style.transition = "none";
-    sheetEl.style.transform = `translateY(${currentDy}px)`;
-    if (backdropEl) {
-      const h = Math.max(240, sheetEl.offsetHeight || 360);
-      const frac = Math.max(0, 1 - currentDy / (h * 1.15));
-      backdropEl.style.background = `rgba(0, 0, 0, ${(0.55 * frac).toFixed(3)})`;
+  const clearSnapBackTimer = () => {
+    if (snapBackTimer !== null) {
+      window.clearTimeout(snapBackTimer);
+      snapBackTimer = null;
+      if (snapBackCard) {
+        snapBackCard.style.transition = "";
+        snapBackCard.style.transform = "";
+      }
+      if (snapBackBackdrop) {
+        snapBackBackdrop.style.transition = "";
+        snapBackBackdrop.style.background = "";
+      }
+      snapBackCard = null;
+      snapBackBackdrop = null;
     }
   };
 
-  const beginDrag = (x: number, y: number, immediate: boolean) => {
+  const resetTracking = () => {
+    tracking = false;
+    dragging = false;
+    mode = null;
+    pointerId = -1;
+    startTarget = null;
+    activeCard = null;
+    activeBackdrop = null;
+    setSwipeDismissActive(false);
+  };
+
+  const applyTransform = (card: HTMLElement, backdrop: HTMLElement | null, dy: number) => {
+    currentDy = Math.max(0, dy);
+    card.style.transition = "none";
+    card.style.transform = `translateY(${currentDy}px)`;
+    if (backdrop) {
+      const h = Math.max(240, card.offsetHeight || 360);
+      const frac = Math.max(0, 1 - currentDy / (h * 1.15));
+      backdrop.style.transition = "none";
+      backdrop.style.background = `rgba(0, 0, 0, ${(0.58 * frac).toFixed(3)})`;
+    }
+  };
+
+  const canStartFrom = (
+    target: EventTarget | null,
+    card: HTMLElement,
+    backdrop: HTMLElement | null,
+  ): "immediate" | "slop" | null => {
+    if (dismissingCards.has(card) || !card.isConnected) return null;
+    if (canDismiss && !canDismiss()) return null;
+    if (backdrop && target === backdrop) return "slop";
+    if (!(target instanceof Node) || !card.contains(target)) return null;
+    if (isDragExcludedTarget(target)) return null;
+    if (allowImmediateHandle && target instanceof Element && target.closest(".sheet-handle")) {
+      return "immediate";
+    }
+    if (hasScrolledAncestor(target, card)) return null;
+    return "slop";
+  };
+
+  const beginDrag = (
+    x: number,
+    y: number,
+    immediate: boolean,
+    target: EventTarget | null,
+    card: HTMLElement,
+    backdrop: HTMLElement | null,
+  ) => {
+    clearSnapBackTimer();
     tracking = true;
     dragging = immediate;
+    movedBeyondSlop = false;
     startX = x;
     startY = y;
     currentDy = 0;
@@ -92,25 +228,66 @@ export function attachSheetSwipeToDismiss(
     lastY = y;
     prevTs = performance.now();
     lastTs = prevTs;
-    if (immediate) applyTransform(0);
+    startTarget = target;
+    activeCard = card;
+    activeBackdrop = backdrop;
+    if (immediate) {
+      setSwipeDismissActive(true);
+      applyTransform(card, backdrop, 0);
+    }
   };
 
   const updateDrag = (x: number, y: number): boolean => {
-    if (!tracking) return false;
+    if (!tracking || !activeCard || !activeCard.isConnected || dismissingCards.has(activeCard)) {
+      resetTracking();
+      return false;
+    }
+    if (canDismiss && !canDismiss()) {
+      resetTracking();
+      return false;
+    }
     const dx = x - startX;
     const dy = y - startY;
     if (!dragging) {
-      if (dy > 8 && Math.abs(dy) > Math.abs(dx) * 1.15) {
-        dragging = true;
-        startY = y - Math.max(0, dy - 8);
-        applyTransform(0);
-      } else if (Math.abs(dx) > 10 && Math.abs(dx) >= Math.abs(dy)) {
-        tracking = false;
-        mode = null;
-        return false;
-      } else {
+      if (
+        startTarget &&
+        startTarget !== activeBackdrop &&
+        hasScrolledAncestor(startTarget, activeCard)
+      ) {
+        resetTracking();
         return false;
       }
+      if (dy < -6) {
+        resetTracking();
+        return false;
+      }
+      if (Math.abs(dx) > 10 && Math.abs(dx) >= Math.abs(dy)) {
+        resetTracking();
+        return false;
+      }
+      if (dy > slopPx && Math.abs(dy) > Math.abs(dx) * slopeRatio) {
+        dragging = true;
+        movedBeyondSlop = true;
+        startY = y;
+        prevY = y;
+        lastY = y;
+        prevTs = performance.now();
+        lastTs = prevTs;
+        setSwipeDismissActive(true);
+        if (mode === "mouse" && pointerId !== -1) {
+          try {
+            gestureRoot.setPointerCapture(pointerId);
+          } catch {
+          }
+        }
+        applyTransform(activeCard, activeBackdrop, 0);
+        return true;
+      }
+      return false;
+    }
+
+    if (Math.abs(y - startY) > 4) {
+      movedBeyondSlop = true;
     }
     const now = performance.now();
     if (now - lastTs >= 16) {
@@ -119,69 +296,120 @@ export function attachSheetSwipeToDismiss(
       lastY = y;
       lastTs = now;
     }
-    applyTransform(Math.max(0, y - startY));
+    applyTransform(activeCard, activeBackdrop, Math.max(0, y - startY));
     return true;
   };
 
   const finishDrag = (cancelled = false) => {
     if (!tracking) return;
+    const card = activeCard;
+    const backdrop = activeBackdrop;
     const wasDragging = dragging;
+    const hadMotion = movedBeyondSlop;
     const dy = currentDy;
-    tracking = false;
-    dragging = false;
-    mode = null;
-    pointerId = -1;
-    if (!wasDragging) return;
+    const activePointerId = pointerId;
+    const wasMouse = mode === "mouse";
+
+    if (wasMouse && activePointerId !== -1) {
+      try {
+        if (gestureRoot.hasPointerCapture(activePointerId)) {
+          gestureRoot.releasePointerCapture(activePointerId);
+        }
+      } catch {
+      }
+    }
+    resetTracking();
+
+    if (hadMotion) {
+      suppressNextClick();
+    }
+    if (!wasDragging || !card || !card.isConnected) {
+      if (card) {
+        card.style.transition = "";
+        card.style.transform = "";
+      }
+      if (backdrop) {
+        backdrop.style.transition = "";
+        backdrop.style.background = "";
+      }
+      return;
+    }
 
     const now = performance.now();
     const dt = Math.max(16, (lastTs > prevTs ? lastTs : now) - prevTs);
     const vel = (lastY - prevY) / dt;
-    const threshold = Math.min(110, Math.max(68, (sheetEl.offsetHeight || 360) * 0.25));
+    const threshold = Math.min(
+      maxThresholdPx,
+      Math.max(minThresholdPx, (card.offsetHeight || 360) * heightFrac),
+    );
 
     if (!cancelled && (dy > threshold || (dy > 24 && vel > 0.45))) {
-      sheetEl.style.transition = "transform 160ms ease-out";
-      sheetEl.style.transform = "translateY(100%)";
-      if (backdropEl) {
-        backdropEl.style.transition = "background 160ms ease-out";
-        backdropEl.style.background = "rgba(0, 0, 0, 0)";
-      }
-      window.setTimeout(onDismiss, 160);
-    } else {
-      sheetEl.style.transition = "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)";
-      sheetEl.style.transform = "translateY(0px)";
-      if (backdropEl) {
-        backdropEl.style.transition = "background 180ms ease-out";
-        backdropEl.style.background = "";
+      dismissingCards.add(card);
+      card.style.transition = "transform 160ms ease-out";
+      card.style.transform = "translateY(100%)";
+      if (backdrop) {
+        backdrop.style.transition = "background 160ms ease-out";
+        backdrop.style.background = "rgba(0, 0, 0, 0)";
       }
       window.setTimeout(() => {
-        sheetEl.style.transition = "";
-        sheetEl.style.transform = "";
-        if (backdropEl) backdropEl.style.transition = "";
+        if (!card.isConnected) return;
+        if (canDismiss && !canDismiss()) return;
+        onDismiss();
+      }, 160);
+    } else {
+      card.style.transition = "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)";
+      card.style.transform = "translateY(0px)";
+      if (backdrop) {
+        backdrop.style.transition = "background 180ms ease-out";
+        backdrop.style.background = "";
+      }
+      snapBackCard = card;
+      snapBackBackdrop = backdrop;
+      snapBackTimer = window.setTimeout(() => {
+        snapBackTimer = null;
+        if (snapBackCard) {
+          snapBackCard.style.transition = "";
+          snapBackCard.style.transform = "";
+        }
+        if (snapBackBackdrop) {
+          snapBackBackdrop.style.transition = "";
+          snapBackBackdrop.style.background = "";
+        }
+        snapBackCard = null;
+        snapBackBackdrop = null;
       }, 185);
     }
   };
 
-  sheetEl.addEventListener(
+  gestureRoot.addEventListener(
     "touchstart",
     (e) => {
-      if (e.touches.length !== 1 || mode !== null) return;
-      const startZone = canStartFrom(e.target, true);
+      if (e.touches.length !== 1) {
+        if (mode === "touch") finishDrag(true);
+        return;
+      }
+      if (mode !== null) return;
+      const targets = resolveTargets();
+      if (!targets) return;
+      const startZone = canStartFrom(e.target, targets.card, targets.backdrop);
       if (!startZone) return;
       mode = "touch";
-      beginDrag(e.touches[0].clientX, e.touches[0].clientY, startZone === "immediate");
+      beginDrag(
+        e.touches[0].clientX,
+        e.touches[0].clientY,
+        startZone === "immediate",
+        e.target,
+        targets.card,
+        targets.backdrop,
+      );
     },
     { passive: true },
   );
 
-  sheetEl.addEventListener(
+  gestureRoot.addEventListener(
     "touchmove",
     (e) => {
       if (mode !== "touch" || !tracking || e.touches.length !== 1) return;
-      if (bodyEl && dragging === false && bodyEl.scrollTop > 1) {
-        tracking = false;
-        mode = null;
-        return;
-      }
       const consumed = updateDrag(e.touches[0].clientX, e.touches[0].clientY);
       if (consumed && e.cancelable) {
         e.preventDefault();
@@ -190,41 +418,339 @@ export function attachSheetSwipeToDismiss(
     { passive: false },
   );
 
-  sheetEl.addEventListener("touchend", () => {
+  gestureRoot.addEventListener("touchend", () => {
     if (mode === "touch") finishDrag(false);
   });
-  sheetEl.addEventListener("touchcancel", () => {
+  gestureRoot.addEventListener("touchcancel", () => {
     if (mode === "touch") finishDrag(true);
   });
 
-  sheetEl.addEventListener("pointerdown", (e) => {
+  gestureRoot.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "touch" || e.button !== 0 || mode !== null) return;
-    const startZone = canStartFrom(e.target, false);
+    const targets = resolveTargets();
+    if (!targets) return;
+    const startZone = canStartFrom(e.target, targets.card, targets.backdrop);
     if (!startZone) return;
     mode = "mouse";
     pointerId = e.pointerId;
-    beginDrag(e.clientX, e.clientY, true);
-    try {
-      sheetEl.setPointerCapture(e.pointerId);
-    } catch {
+    const immediate = startZone === "immediate";
+    beginDrag(e.clientX, e.clientY, immediate, e.target, targets.card, targets.backdrop);
+    if (immediate) {
+      try {
+        gestureRoot.setPointerCapture(e.pointerId);
+      } catch {
+      }
     }
   });
 
-  sheetEl.addEventListener("pointermove", (e) => {
+  gestureRoot.addEventListener("pointermove", (e) => {
     if (mode !== "mouse" || e.pointerId !== pointerId) return;
     updateDrag(e.clientX, e.clientY);
   });
 
   const endMouse = (e: PointerEvent) => {
     if (mode !== "mouse" || e.pointerId !== pointerId) return;
-    try {
-      if (sheetEl.hasPointerCapture(e.pointerId)) sheetEl.releasePointerCapture(e.pointerId);
-    } catch {
-    }
     finishDrag(e.type === "pointercancel");
   };
-  sheetEl.addEventListener("pointerup", endMouse);
-  sheetEl.addEventListener("pointercancel", endMouse);
+  gestureRoot.addEventListener("pointerup", endMouse);
+  gestureRoot.addEventListener("pointercancel", endMouse);
+}
+
+export function attachSheetSwipeToDismiss(
+  sheetEl: HTMLElement,
+  backdropEl: HTMLElement | null,
+  onDismiss: () => void,
+): void {
+  attachVerticalSwipeDismiss({
+    gestureRoot: backdropEl ?? sheetEl,
+    resolveTargets: () => ({ card: sheetEl, backdrop: backdropEl }),
+    onDismiss,
+    slopPx: 8,
+    slopeRatio: 1.15,
+    minThresholdPx: 68,
+    maxThresholdPx: 110,
+    heightFrac: 0.25,
+    allowImmediateHandle: true,
+  });
+}
+
+export function attachModalHostPageSwipeToDismiss(
+  modalHostEl: HTMLElement,
+  canDismiss: () => boolean,
+  onDismiss: () => void,
+): void {
+  attachVerticalSwipeDismiss({
+    gestureRoot: modalHostEl,
+    resolveTargets: () => {
+      const card = modalHostEl.querySelector<HTMLElement>(".modal-card.mobile-page");
+      if (!card) return null;
+      return { card, backdrop: card.closest<HTMLElement>(".modal-backdrop") };
+    },
+    canDismiss,
+    onDismiss,
+    slopPx: 10,
+    slopeRatio: 1.2,
+    minThresholdPx: 80,
+    maxThresholdPx: 130,
+    heightFrac: 0.22,
+    allowImmediateHandle: false,
+  });
+}
+
+function resetDrawerGestureState(sidebarEl: HTMLElement, backdropEl: HTMLElement): void {
+  if (drawerCloseTimer !== null) {
+    window.clearTimeout(drawerCloseTimer);
+    drawerCloseTimer = null;
+  }
+  if (drawerSnapTimer !== null) {
+    window.clearTimeout(drawerSnapTimer);
+    drawerSnapTimer = null;
+  }
+  drawerDragMode = null;
+  setSwipeDismissActive(false);
+  sidebarEl.style.transition = "";
+  sidebarEl.style.transform = "";
+  backdropEl.style.transition = "";
+  backdropEl.style.opacity = "";
+}
+
+function attachDrawerSwipeToDismiss(
+  sidebarEl: HTMLElement,
+  backdropEl: HTMLElement,
+  onClose: () => void,
+): void {
+  let tracking = false;
+  let dragging = false;
+  let movedBeyondSlop = false;
+  let startX = 0;
+  let startY = 0;
+  let currentDx = 0;
+  let prevX = 0;
+  let prevTs = 0;
+  let lastX = 0;
+  let lastTs = 0;
+  let pointerId = -1;
+  let captureEl: HTMLElement | null = null;
+
+  const clearSnapTimer = () => {
+    if (drawerSnapTimer !== null) {
+      window.clearTimeout(drawerSnapTimer);
+      drawerSnapTimer = null;
+      sidebarEl.style.transition = "";
+      sidebarEl.style.transform = "";
+      backdropEl.style.transition = "";
+      backdropEl.style.opacity = "";
+    }
+  };
+
+  const resetLocalTracking = () => {
+    tracking = false;
+    dragging = false;
+    drawerDragMode = null;
+    pointerId = -1;
+    captureEl = null;
+    setSwipeDismissActive(false);
+  };
+
+  const applyDrawerTransform = (dx: number) => {
+    const width = Math.max(180, sidebarEl.offsetWidth || 260);
+    currentDx = Math.max(-width, Math.min(0, dx));
+    sidebarEl.style.transition = "none";
+    sidebarEl.style.transform = `translateX(${currentDx}px)`;
+    backdropEl.style.transition = "none";
+    backdropEl.style.opacity = String(Math.max(0, Math.min(1, 1 + currentDx / width)));
+  };
+
+  const canStart = (target: EventTarget | null): boolean => {
+    if (!state.mobileDrawerOpen || !isCompactOrMediumViewport() || drawerCloseTimer !== null) {
+      return false;
+    }
+    if (isDragExcludedTarget(target)) return false;
+    return target instanceof Node && (sidebarEl.contains(target) || target === backdropEl);
+  };
+
+  const begin = (x: number, y: number, sourceEl: HTMLElement) => {
+    clearSnapTimer();
+    tracking = true;
+    dragging = false;
+    movedBeyondSlop = false;
+    startX = x;
+    startY = y;
+    currentDx = 0;
+    prevX = x;
+    lastX = x;
+    prevTs = performance.now();
+    lastTs = prevTs;
+    captureEl = sourceEl;
+  };
+
+  const update = (x: number, y: number): boolean => {
+    if (!tracking || !state.mobileDrawerOpen || drawerCloseTimer !== null) {
+      resetLocalTracking();
+      return false;
+    }
+    const dx = x - startX;
+    const dy = y - startY;
+    if (!dragging) {
+      if (dx > 12) {
+        resetLocalTracking();
+        return false;
+      }
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) {
+        resetLocalTracking();
+        return false;
+      }
+      if (dx < -8 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+        dragging = true;
+        movedBeyondSlop = true;
+        startX = x;
+        prevX = x;
+        lastX = x;
+        prevTs = performance.now();
+        lastTs = prevTs;
+        setSwipeDismissActive(true);
+        if (drawerDragMode === "mouse" && pointerId !== -1 && captureEl) {
+          try {
+            captureEl.setPointerCapture(pointerId);
+          } catch {
+          }
+        }
+        applyDrawerTransform(0);
+        return true;
+      }
+      return false;
+    }
+
+    if (Math.abs(x - startX) > 4) {
+      movedBeyondSlop = true;
+    }
+    const now = performance.now();
+    if (now - lastTs >= 16) {
+      prevX = lastX;
+      prevTs = lastTs;
+      lastX = x;
+      lastTs = now;
+    }
+    applyDrawerTransform(Math.min(0, x - startX));
+    return true;
+  };
+
+  const finish = (cancelled = false) => {
+    if (!tracking) return;
+    const wasDragging = dragging;
+    const hadMotion = movedBeyondSlop;
+    const dx = currentDx;
+    const activePointerId = pointerId;
+    const cap = captureEl;
+    const wasMouse = drawerDragMode === "mouse";
+
+    if (wasMouse && activePointerId !== -1 && cap) {
+      try {
+        if (cap.hasPointerCapture(activePointerId)) {
+          cap.releasePointerCapture(activePointerId);
+        }
+      } catch {
+      }
+    }
+    resetLocalTracking();
+
+    if (hadMotion) {
+      suppressNextClick();
+    }
+    if (!wasDragging) return;
+
+    const width = Math.max(180, sidebarEl.offsetWidth || 260);
+    const now = performance.now();
+    const dt = Math.max(16, (lastTs > prevTs ? lastTs : now) - prevTs);
+    const velX = (lastX - prevX) / dt;
+    const threshold = Math.min(100, Math.max(56, width * 0.28));
+
+    if (!cancelled && (-dx > threshold || (-dx > 24 && velX < -0.45))) {
+      sidebarEl.style.transition = "transform 160ms ease-out";
+      sidebarEl.style.transform = "translateX(-105%)";
+      backdropEl.style.transition = "opacity 160ms ease-out";
+      backdropEl.style.opacity = "0";
+      drawerCloseTimer = window.setTimeout(() => {
+        drawerCloseTimer = null;
+        lastDrawerOpenState = false;
+        state.mobileDrawerOpen = false;
+        sidebarEl.classList.remove("drawer-open");
+        backdropEl.classList.remove("visible");
+        sidebarEl.style.transition = "";
+        sidebarEl.style.transform = "";
+        backdropEl.style.transition = "";
+        backdropEl.style.opacity = "";
+        onClose();
+      }, 160);
+    } else {
+      sidebarEl.style.transition = "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)";
+      sidebarEl.style.transform = "translateX(0px)";
+      backdropEl.style.transition = "opacity 180ms ease-out";
+      backdropEl.style.opacity = "1";
+      drawerSnapTimer = window.setTimeout(() => {
+        drawerSnapTimer = null;
+        sidebarEl.style.transition = "";
+        sidebarEl.style.transform = "";
+        backdropEl.style.transition = "";
+        backdropEl.style.opacity = "";
+      }, 185);
+    }
+  };
+
+  for (const targetEl of [sidebarEl, backdropEl]) {
+    targetEl.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches.length !== 1) {
+          if (drawerDragMode === "touch") finish(true);
+          return;
+        }
+        if (drawerDragMode !== null || !canStart(e.target)) return;
+        drawerDragMode = "touch";
+        begin(e.touches[0].clientX, e.touches[0].clientY, targetEl);
+      },
+      { passive: true },
+    );
+
+    targetEl.addEventListener(
+      "touchmove",
+      (e) => {
+        if (drawerDragMode !== "touch" || !tracking || e.touches.length !== 1) return;
+        const consumed = update(e.touches[0].clientX, e.touches[0].clientY);
+        if (consumed && e.cancelable) {
+          e.preventDefault();
+        }
+      },
+      { passive: false },
+    );
+
+    targetEl.addEventListener("touchend", () => {
+      if (drawerDragMode === "touch") finish(false);
+    });
+    targetEl.addEventListener("touchcancel", () => {
+      if (drawerDragMode === "touch") finish(true);
+    });
+
+    targetEl.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "touch" || e.button !== 0 || drawerDragMode !== null) return;
+      if (!canStart(e.target)) return;
+      drawerDragMode = "mouse";
+      pointerId = e.pointerId;
+      begin(e.clientX, e.clientY, targetEl);
+    });
+
+    targetEl.addEventListener("pointermove", (e) => {
+      if (drawerDragMode !== "mouse" || e.pointerId !== pointerId) return;
+      update(e.clientX, e.clientY);
+    });
+
+    const endMouse = (e: PointerEvent) => {
+      if (drawerDragMode !== "mouse" || e.pointerId !== pointerId) return;
+      finish(e.type === "pointercancel");
+    };
+    targetEl.addEventListener("pointerup", endMouse);
+    targetEl.addEventListener("pointercancel", endMouse);
+  }
 }
 
 export function closeAllMobileOverlays(): boolean {
@@ -253,7 +779,13 @@ export function initMobileChrome(hosts: MobileHosts, handlers: MobileChromeHandl
   handlersRef = handlers;
 
   hosts.drawerBackdrop.addEventListener("click", () => {
+    if (drawerCloseTimer !== null) return;
     state.mobileDrawerOpen = false;
+    syncMobileChrome();
+    notify();
+  });
+
+  attachDrawerSwipeToDismiss(hosts.sidebarHost, hosts.drawerBackdrop, () => {
     syncMobileChrome();
     notify();
   });
@@ -290,6 +822,11 @@ export function syncBottomInsets(): void {
 export function syncMobileChrome(): void {
   if (!hostsRef || !handlersRef) return;
   const { topbarHost, dockHost, drawerBackdrop, sheetHost, sidebarHost } = hostsRef;
+
+  if (state.mobileDrawerOpen !== lastDrawerOpenState) {
+    resetDrawerGestureState(sidebarHost, drawerBackdrop);
+    lastDrawerOpenState = state.mobileDrawerOpen;
+  }
 
   drawerBackdrop.classList.toggle("visible", state.mobileDrawerOpen);
   sidebarHost.classList.toggle("drawer-open", state.mobileDrawerOpen);

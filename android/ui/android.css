@@ -139,6 +139,11 @@ html[data-platform="android"] .toc-mobile-tabs {
     transform: translateX(-105%);
     transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    will-change: transform;
+  }
+
+  html[data-platform="android"] .sidebar-header {
+    touch-action: none;
   }
 
   html[data-platform="android"] .sidebar.drawer-open {
@@ -153,6 +158,7 @@ html[data-platform="android"] .toc-mobile-tabs {
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s ease;
+    touch-action: none;
   }
 
   html[data-platform="android"] .mobile-drawer-backdrop.visible {
@@ -540,6 +546,7 @@ html[data-platform="android"] .toc-mobile-tabs {
     align-items: flex-end;
     justify-content: stretch;
     padding: 0;
+    touch-action: none;
   }
 
   html[data-platform="android"] .modal-card.mobile-sheet {
@@ -564,6 +571,7 @@ html[data-platform="android"] .toc-mobile-tabs {
     align-items: stretch;
     justify-content: stretch;
     padding: 0;
+    touch-action: none;
   }
 
   html[data-platform="android"] .modal-card.mobile-page {
@@ -575,6 +583,11 @@ html[data-platform="android"] .toc-mobile-tabs {
     border: none;
     padding-top: var(--safe-top);
     padding-bottom: var(--safe-bottom);
+    will-change: transform;
+  }
+
+  html[data-platform="android"] .modal-card.mobile-page .modal-header {
+    touch-action: none;
   }
 
   html[data-platform="android"] .modal-header {
@@ -773,6 +786,11 @@ html[data-platform="android"] .toc-mobile-tabs {
   html[data-platform="android"] .modal-backdrop:has(.mobile-sheet) {
     align-items: flex-end;
     padding: 0 24px;
+    touch-action: none;
+  }
+
+  html[data-platform="android"] .modal-backdrop:has(.mobile-page) {
+    touch-action: none;
   }
 
   html[data-platform="android"] .modal-card.mobile-sheet {

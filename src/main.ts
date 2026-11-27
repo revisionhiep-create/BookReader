@@ -3,6 +3,7 @@ import "./styles/app.css";
 import "../android/ui/android.css";
 
 import {
+  attachModalHostPageSwipeToDismiss,
   closeAllMobileOverlays,
   initMobileChrome,
   syncMobileChrome,
@@ -591,6 +592,14 @@ function mountToolbarOnce(): void {
         onToast: showToast,
       },
     );
+    attachModalHostPageSwipeToDismiss(
+      modalHostEl,
+      () =>
+        state.activeModal !== null &&
+        state.activeModal !== "setup" &&
+        state.activeModal !== "voices",
+      closeModal,
+    );
   }
 }
 
@@ -1100,6 +1109,7 @@ function installPreviewTouchScroll(): void {
 
   document.addEventListener("pointerdown", (e) => {
     if (e.pointerType !== "mouse" || e.button !== 0) return;
+    if (document.documentElement.dataset.swipeDismissActive === "1") return;
     const targetEl = e.target as HTMLElement | null;
     if (
       targetEl?.closest(
@@ -1126,6 +1136,13 @@ function installPreviewTouchScroll(): void {
 
   document.addEventListener("pointermove", (e) => {
     if (!activeEl || e.pointerId !== pointerId) return;
+    if (document.documentElement.dataset.swipeDismissActive === "1") {
+      activeEl = null;
+      pointerId = -1;
+      dragging = false;
+      document.documentElement.classList.remove("preview-dragging");
+      return;
+    }
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
     const totalDist = Math.hypot(e.clientX - startX, e.clientY - startY);
