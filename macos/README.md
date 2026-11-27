@@ -11,7 +11,7 @@ From [GitHub Releases](https://github.com/revisionhiep-create/BookReader/release
 
 ## Quick Start for macOS Users
 
-- **Requirements**: macOS 12 Monterey or newer. Built-in **Phonon 31M** (37 English voices) and **Qwen3-TTS** voice cloning run completely offline after downloading weights on first use.
+- **Requirements**: macOS 12 Monterey or newer. Built-in **Phonon 31M** (37 English voices), **Kyutai Pocket TTS** (27 voices each for French, German, Spanish, Portuguese, Italian, and Dutch), full **7-language UI**, and **Qwen3-TTS** voice cloning run completely offline after downloading weights on first use.
 
 1. **Extract into Your Own Portable Folder**
    - Open the `.dmg` file and drag `BookReader.app` into a dedicated writable folder (for example, `~/BookReader/` or an external drive).

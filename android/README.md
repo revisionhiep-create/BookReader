@@ -1,6 +1,6 @@
 # BookReader for Android
 
-Adaptive Android port of **BookReader** powered by **Tauri v2**, **Phonon 31M** (37 local English voices), PDF.js, and background `MediaSession` narration.
+Adaptive Android port of **BookReader** powered by **Tauri v2**, **Phonon 31M** (37 English voices), **Kyutai Pocket TTS** (27 voices each for French, German, Spanish, Portuguese, Italian, and Dutch), full **7-language UI**, PDF.js, and background `MediaSession` narration.
 
 *(Voice cloning via Qwen3-TTS is intentionally excluded on Android to keep the APK compact, responsive, and memory-efficient.)*
 
@@ -15,7 +15,7 @@ Adaptive Android port of **BookReader** powered by **Tauri v2**, **Phonon 31M** 
 3. If Android asks, turn on **"Allow from this source"** (**Install unknown apps**) for that browser/file manager, then tap **Install**.
    - **No Developer Mode or PC needed:** Package ID `com.bookreader.android` and its release signing key are officially registered in Android Developer Console.
 4. Open **BookReader** and tap **Allow** on the notification prompt so lock-screen and notification media controls work during background reading.
-5. On first launch, tap **Download Phonon 31M (~65 MB)**, then tap **Import Book** to open a PDF, EPUB, DOCX, or TXT file.
+5. On first launch, choose your language (**English** with Phonon 31M ~65 MB, or **French / German / Spanish / Portuguese / Italian / Dutch** with Kyutai Pocket TTS ~209 MB) and tap **Download**, then tap **Import Book** to open a PDF, EPUB, DOCX, or TXT file. You can switch UI language or download additional voice languages anytime in **Settings**.
 
 ---
 

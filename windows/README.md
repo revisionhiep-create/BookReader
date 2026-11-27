@@ -4,7 +4,7 @@ This folder holds Windows-specific configuration, build scripts, and the standal
 
 ## Quick Start for Windows Users
 
-- **Requirements**: Windows 10 or Windows 11 (64-bit). Microsoft Edge WebView2 is preinstalled on Windows 10/11 (if missing on an older Windows 10 install, get the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)). No NVIDIA GPU or CUDA installation is required — built-in voices run on CPU, and optional Qwen3-TTS voice cloning automatically uses NVIDIA CUDA if installed and falls back to CPU otherwise.
+- **Requirements**: Windows 10 or Windows 11 (64-bit). Microsoft Edge WebView2 is preinstalled on Windows 10/11 (if missing on an older Windows 10 install, get the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)). No NVIDIA GPU or CUDA installation is required — built-in voices for all **7 languages** (**Phonon 31M** English + **Kyutai Pocket TTS** French, German, Spanish, Portuguese, Italian, and Dutch, with a full 7-language UI) run offline on CPU, and optional **Qwen3-TTS** voice cloning automatically uses NVIDIA CUDA if installed (falling back to CPU otherwise) and auto-unloads VRAM when switching back to built-in voices.
 
 1. **Download & Place in Its Own Folder**
    - Download **[BookReader.exe](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader.exe)** from [GitHub Releases](https://github.com/revisionhiep-create/BookReader/releases/latest).

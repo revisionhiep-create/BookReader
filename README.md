@@ -55,14 +55,31 @@ See [android/README.md](android/README.md) for full Android details, tablet/fold
 
 ---
 
+## Supported Languages & Offline Models
+
+All 7 languages are **ungated** on Hugging Face (no account or API key required) and include a fully localized desktop + Android interface:
+
+| Code | Language | TTS Engine | Download Size | Voices | Flagship / Default Voice |
+| --- | --- | --- | --- | --- | --- |
+| `en` | English | Gradium **Phonon 31M** | ~65 MB | 37 | **Easton** |
+| `fr` | Français | **Kyutai Pocket TTS** | ~209 MB | 27 | **Estelle** |
+| `de` | Deutsch | **Kyutai Pocket TTS** | ~209 MB | 27 | **Juergen** |
+| `es` | Español | **Kyutai Pocket TTS** | ~209 MB | 27 | **Lola** |
+| `pt` | Português | **Kyutai Pocket TTS** | ~209 MB | 27 | **Rafael** |
+| `it` | Italiano | **Kyutai Pocket TTS** | ~209 MB | 27 | **Giovanni** |
+| `nl` | Nederlands | **Kyutai Pocket TTS** | ~209 MB | 27 | **Daan** |
+
+---
+
 ## Features
 
-- **Document Support with Inline Images**: Read **PDF**, **EPUB**, **DOCX** (Word), and **TXT** files while keeping embedded document images intact.
-- **7 Offline Languages (Phonon 31M + Kyutai Pocket TTS) & Custom Voice Cloning**:
+- **Document Support with Inline Images & PDF Reflow Text**: Read **PDF**, **EPUB**, **DOCX** (Word), and **TXT** files while keeping embedded document images intact, or toggle **Reflow Text** on PDFs for clean prose wrapping and typography control.
+- **7 Offline Languages (Phonon 31M + Kyutai Pocket TTS) & Voice Picker Model Detection**:
   - **English (`en`)**: 37 Gradium Phonon 31M voices (US, UK, and Character voices).
-  - **French (`fr`), German (`de`), Spanish (`es`), Portuguese (`pt`), Italian (`it`), & Dutch (`nl`)**: 27 pure-Rust Kyutai Pocket TTS speakers per language with native flagship speakers (**Estelle**, **Jürgen**, **Lola**, **Rafael**, **Giovanni**, **Daan**) pinned first and strict language-only voice filtering.
+  - **French (`fr`), German (`de`), Spanish (`es`), Portuguese (`pt`), Italian (`it`), & Dutch (`nl`)**: 27 pure-Rust Kyutai Pocket TTS speakers per language with native flagship speakers (**Estelle**, **Juergen**, **Lola**, **Rafael**, **Giovanni**, **Daan**) pinned first.
+  - **Voice Picker Model Detection**: Automatically detects the active TTS model/language, lets you switch downloaded language models inline, and strictly displays only voices for the active model/language (plus desktop **Cloned** voices).
   - **Full 7-Language Interface**: Live-switchable UI across English, Français, Deutsch, Español, Português, Italiano, and Nederlands without restarting.
-  - **Custom Voice Cloning (Desktop)**: Local **Qwen3-TTS 0.6B-Base** (Fast, ~2.5 GB) / **1.7B-Base** (Best Quality, ~4.5 GB) voice cloning (3–30s reference clips, 5–15s recommended, with optional transcript for high-fidelity ICL mode or instant X-Vector mode) stored under the **Cloned** category.
+  - **Custom Voice Cloning & Auto-Unload Safeguard (Desktop)**: Local **Qwen3-TTS 0.6B-Base** (Fast, ~2.5 GB) / **1.7B-Base** (Best Quality, ~4.5 GB) voice cloning (3–30s reference clips, 5–15s recommended, with optional transcript for high-fidelity ICL mode or instant X-Vector mode) stored under the **Cloned** category. Switching away from a cloned voice or switching TTS languages automatically unloads Qwen3-TTS from VRAM/RAM (once any active cloned-voice export finishes) and unloads inactive language models.
 - **Live Highlighting & Closed Captions (CC)**:
   - Highlights the active sentence accurately on the PDF canvas overlay (without cross-page bleed) or rich text view and scrolls smoothly along the top of the viewport.
   - Toggleable **Closed Captions** bar shows smooth 60–120 FPS latency-compensated word-by-word highlighting with adjustable caption font size (`A-` / `21px` / `A+` in the top toolbar and a slider in **Settings**).
@@ -115,7 +132,7 @@ BookReader automatically initializes two folders:
   - `BookReader_Data/voices/` — downloaded Phonon voice files, `pocket/<lang>/` Pocket speaker embeddings, and `cloned/` custom voice prompts
   - `BookReader_Data/books/` — imported copies of your books and cached assets
 - **User Preferences** (`%APPDATA%\Bookreader\` on Windows, `~/Library/Application Support/Bookreader/` on macOS, private app storage on Android):
-  - Saved immediately on every setting change: theme, voice, speed, typography, zoom, caption font size, pause durations, dark PDF page state, pronunciation rules, ignore rules, library reading progress/bookmarks, and saved desktop window geometry (`window_state.json`).
+  - Saved immediately on every setting change: UI language (`ui_language`), active TTS language (`tts_language`), theme, voice, speed, typography, zoom, caption font size, pause durations, dark PDF page state, PDF reflow state, pronunciation rules, ignore rules, library reading progress/bookmarks, and saved desktop window geometry (`window_state.json`).
 
 ---
 
