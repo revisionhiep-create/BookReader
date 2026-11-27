@@ -9,7 +9,7 @@
 //! - User settings and rule databases live in `%APPDATA%\Bookreader\` (Windows)
 //!   or `~/Library/Application Support/Bookreader/` (macOS).
 
-use crate::models::QwenModelVariant;
+use crate::models::{AppLanguage, QwenModelVariant};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -19,9 +19,11 @@ pub struct AppPaths {
     pub appdata_dir: PathBuf,
     pub data_dir: PathBuf,
     pub models_dir: PathBuf,
+    pub pocket_models_root: PathBuf,
     pub qwen_models_dir: PathBuf,
     pub qwen_0_6b_models_dir: PathBuf,
     pub voices_dir: PathBuf,
+    pub pocket_voices_root: PathBuf,
     pub cloned_voices_dir: PathBuf,
     pub books_dir: PathBuf,
 }
@@ -64,6 +66,7 @@ impl AppPaths {
     /// Creates an [`AppPaths`] rooted at explicit directories (used in tests and [`Self::init`]).
     pub fn from_roots(appdata_dir: PathBuf, data_dir: PathBuf) -> Result<Self, String> {
         let models_dir = data_dir.join("models").join("phonon-31m-en");
+        let pocket_models_root = data_dir.join("models").join("pocket-tts");
         let qwen_models_dir = data_dir
             .join("models")
             .join(QwenModelVariant::Quality1_7B.dir_name());
@@ -71,6 +74,7 @@ impl AppPaths {
             .join("models")
             .join(QwenModelVariant::Fast0_6B.dir_name());
         let voices_dir = data_dir.join("voices");
+        let pocket_voices_root = voices_dir.join("pocket");
         let cloned_voices_dir = voices_dir.join("cloned");
         let books_dir = data_dir.join("books");
 
@@ -78,9 +82,11 @@ impl AppPaths {
             &appdata_dir,
             &data_dir,
             &models_dir,
+            &pocket_models_root,
             &qwen_models_dir,
             &qwen_0_6b_models_dir,
             &voices_dir,
+            &pocket_voices_root,
             &cloned_voices_dir,
             &books_dir,
         ] {
@@ -92,9 +98,11 @@ impl AppPaths {
             appdata_dir,
             data_dir,
             models_dir,
+            pocket_models_root,
             qwen_models_dir,
             qwen_0_6b_models_dir,
             voices_dir,
+            pocket_voices_root,
             cloned_voices_dir,
             books_dir,
         })
@@ -102,6 +110,38 @@ impl AppPaths {
 
     pub fn is_cloned_voice_id(voice_id: &str) -> bool {
         voice_id.starts_with("clone_")
+    }
+
+    /// Parses `"pocket:<lang>:<slug>"` into `(AppLanguage, slug)` after validating `slug`.
+    pub fn parse_pocket_voice_id(voice_id: &str) -> Option<(AppLanguage, &str)> {
+        let rest = voice_id.strip_prefix("pocket:")?;
+        let (lang_code, slug) = rest.split_once(':')?;
+        let lang = AppLanguage::from_code(lang_code)?;
+        if lang == AppLanguage::En {
+            return None;
+        }
+        validate_single_segment(slug).ok()?;
+        Some((lang, slug))
+    }
+
+    /// Returns the directory for a Pocket TTS language checkpoint (`data_dir/models/pocket-tts/<folder>`).
+    pub fn pocket_model_dir(&self, lang: AppLanguage) -> Result<PathBuf, String> {
+        let folder = lang
+            .pocket_folder()
+            .ok_or_else(|| "English uses Phonon 31M, not Pocket TTS".to_string())?;
+        Ok(self.pocket_models_root.join(folder))
+    }
+
+    /// Returns the path for a Pocket TTS precomputed speaker `.safetensors` file.
+    pub fn pocket_voice_path(&self, lang: AppLanguage, slug: &str) -> Result<PathBuf, String> {
+        let folder = lang
+            .pocket_folder()
+            .ok_or_else(|| "English has no Pocket voice directory".to_string())?;
+        validate_single_segment(slug)?;
+        Ok(self
+            .pocket_voices_root
+            .join(folder)
+            .join(format!("{slug}.safetensors")))
     }
 
     pub fn qwen_model_dir(&self, variant: QwenModelVariant) -> &Path {
@@ -119,6 +159,33 @@ impl AppPaths {
                 let p = self.models_dir.join(name);
                 fs::metadata(&p).map(|m| m.is_file() && m.len() > 0).unwrap_or(false)
             })
+    }
+
+    /// Returns `true` when all required model files for `lang` exist and are non-empty.
+    pub fn language_model_ready(&self, lang: AppLanguage) -> bool {
+        if lang == AppLanguage::En {
+            return self.model_ready();
+        }
+        let Ok(dir) = self.pocket_model_dir(lang) else {
+            return false;
+        };
+        ["model.safetensors", "tokenizer.json"]
+            .iter()
+            .all(|name| file_nonempty(Ok(dir.join(name))))
+    }
+
+    /// Returns `true` if at least one supported TTS language model (Phonon EN or Pocket TTS) is ready.
+    pub fn any_tts_model_ready(&self) -> bool {
+        AppLanguage::all()
+            .into_iter()
+            .any(|lang| self.language_model_ready(lang))
+    }
+
+    /// Returns the first ready TTS language in canonical catalog order (`En, Fr, De, Es, Pt, It, Nl`).
+    pub fn first_ready_tts_language(&self) -> Option<AppLanguage> {
+        AppLanguage::all()
+            .into_iter()
+            .find(|&lang| self.language_model_ready(lang))
     }
 
     /// Returns `true` when all required files for `variant` exist and are non-empty.
@@ -190,6 +257,9 @@ impl AppPaths {
                     .into_iter()
                     .any(|v| file_nonempty(self.cloned_voice_prompt_path_for(voice_id, v)))
                 || file_nonempty(self.cloned_voice_prompt_path(voice_id));
+        }
+        if let Some((lang, slug)) = Self::parse_pocket_voice_id(voice_id) {
+            return file_nonempty(self.pocket_voice_path(lang, slug));
         }
         file_nonempty(self.voice_path(voice_id))
     }
@@ -396,8 +466,46 @@ mod tests {
         assert_eq!(paths.appdata_dir, root.join("config"));
         assert_eq!(paths.data_dir, root.join("BookReader_Data"));
         assert!(paths.models_dir.is_dir());
+        assert!(paths.pocket_models_root.is_dir());
         assert!(paths.voices_dir.is_dir());
+        assert!(paths.pocket_voices_root.is_dir());
         assert!(paths.books_dir.is_dir());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolves_pocket_models_voices_and_ready_languages() {
+        let root = std::env::temp_dir().join(format!("bookreader_pocket_paths_{}", uuid::Uuid::new_v4()));
+        let paths = AppPaths::from_roots(root.join("appdata"), root.join("data")).unwrap();
+
+        assert!(!paths.any_tts_model_ready());
+        assert_eq!(paths.first_ready_tts_language(), None);
+        assert!(paths.pocket_model_dir(AppLanguage::En).is_err());
+
+        assert_eq!(
+            AppPaths::parse_pocket_voice_id("pocket:fr:estelle"),
+            Some((AppLanguage::Fr, "estelle"))
+        );
+        assert_eq!(AppPaths::parse_pocket_voice_id("pocket:en:easton"), None);
+        assert_eq!(AppPaths::parse_pocket_voice_id("pocket:fr:../bad"), None);
+        assert_eq!(AppPaths::parse_pocket_voice_id("LMDIYE0Oa377Qh6Z"), None);
+
+        let fr_dir = paths.pocket_model_dir(AppLanguage::Fr).unwrap();
+        fs::create_dir_all(&fr_dir).unwrap();
+        fs::write(fr_dir.join("model.safetensors"), b"weights").unwrap();
+        assert!(!paths.language_model_ready(AppLanguage::Fr));
+        fs::write(fr_dir.join("tokenizer.json"), b"{}").unwrap();
+
+        assert!(paths.language_model_ready(AppLanguage::Fr));
+        assert!(paths.any_tts_model_ready());
+        assert_eq!(paths.first_ready_tts_language(), Some(AppLanguage::Fr));
+
+        let fr_voice = paths.pocket_voice_path(AppLanguage::Fr, "estelle").unwrap();
+        assert!(!paths.is_voice_downloaded("pocket:fr:estelle"));
+        fs::create_dir_all(fr_voice.parent().unwrap()).unwrap();
+        fs::write(&fr_voice, b"kv").unwrap();
+        assert!(paths.is_voice_downloaded("pocket:fr:estelle"));
+
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -1,5 +1,7 @@
+import { tr } from "../i18n";
 import { state } from "../state";
 import type { DocumentPayload } from "../types";
+import { escapeHtml } from "./sidebar";
 
 export class RichViewer {
   private container: HTMLElement;
@@ -35,7 +37,7 @@ export class RichViewer {
     const chaptersHtml = payload.html_chapters
       .map((ch) => `<section class="br-chapter">${ch.html}</section>`)
       .join("\n<hr/>\n");
-    prose.innerHTML = chaptersHtml || "<p>No readable text found in this document.</p>";
+    prose.innerHTML = chaptersHtml || `<p>${escapeHtml(tr("rich_no_text"))}</p>`;
 
     prose.querySelectorAll<HTMLElement>(".br-sent").forEach((el) => {
       const sid = Number(el.dataset.sid);

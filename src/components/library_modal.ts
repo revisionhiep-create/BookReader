@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { invoke, openDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { state } from "../state";
@@ -70,12 +71,12 @@ export async function pickAndImportBook(onStatus?: (msg: string) => void): Promi
   try {
     picked = await openDialog({
       multiple: false,
-      filters: [{ name: "Books", extensions: ["pdf", "epub", "docx", "txt"] }],
+      filters: [{ name: tr("library_books_filter"), extensions: ["pdf", "epub", "docx", "txt"] }],
     });
   } catch {
     const file = await pickBookViaInput();
     if (!file) return null;
-    onStatus?.("Importing book...");
+    onStatus?.(tr("library_importing"));
     const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
     return invoke<BookMeta>("import_book_bytes", {
       filename: file.name,
@@ -83,7 +84,7 @@ export async function pickAndImportBook(onStatus?: (msg: string) => void): Promi
     });
   }
   if (!picked || typeof picked !== "string") return null;
-  onStatus?.("Importing book...");
+  onStatus?.(tr("library_importing"));
   return invoke<BookMeta>("import_book_file", { path: picked });
 }
 
@@ -99,8 +100,10 @@ function renderLibraryList(container: HTMLElement, handlers: LibraryHandlers): v
   const filtered = filterLibraryBooks(ordered, librarySearchQuery);
 
   if (countLabel) {
-    const noun = `book${total === 1 ? "" : "s"}`;
-    countLabel.textContent = trimmedQuery ? `${filtered.length} of ${total} ${noun}` : `${total} ${noun}`;
+    const noun = total === 1 ? tr("common_book_singular") : tr("common_book_plural");
+    countLabel.textContent = trimmedQuery
+      ? tr("library_count_filtered", { filtered: filtered.length, total, noun })
+      : tr("library_count_total", { total, noun });
   }
   if (clearBtn) {
     clearBtn.classList.toggle("hidden", librarySearchQuery.length === 0);
@@ -109,7 +112,7 @@ function renderLibraryList(container: HTMLElement, handlers: LibraryHandlers): v
   if (total === 0) {
     listHost.innerHTML = `
       <div style="padding:36px;text-align:center;color:var(--text-secondary);">
-        Your library is empty. Import a PDF, EPUB, Word (.docx), or TXT file to start reading.
+        ${escapeHtml(tr("library_empty"))}
       </div>
     `;
     return;
@@ -118,8 +121,8 @@ function renderLibraryList(container: HTMLElement, handlers: LibraryHandlers): v
   if (filtered.length === 0) {
     listHost.innerHTML = `
       <div class="library-empty-search">
-        <div>No books match &ldquo;${escapeHtml(trimmedQuery)}&rdquo;.</div>
-        <button type="button" class="btn-secondary" id="btn-library-clear-empty">Clear Search</button>
+        <div>${escapeHtml(tr("library_no_match", { query: trimmedQuery }))}</div>
+        <button type="button" class="btn-secondary" id="btn-library-clear-empty">${escapeHtml(tr("library_clear_search"))}</button>
       </div>
     `;
     listHost.querySelector("#btn-library-clear-empty")?.addEventListener("click", () => {
@@ -147,15 +150,23 @@ function renderLibraryList(container: HTMLElement, handlers: LibraryHandlers): v
             <div style="display:flex;align-items:center;gap:8px;">
               <strong style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(b.title)}</strong>
               <span class="flag-tag">${escapeHtml(b.format.toUpperCase())}</span>
-              ${isCurrent ? `<span class="flag-tag">Now Reading</span>` : ""}
+              ${isCurrent ? `<span class="flag-tag">${escapeHtml(tr("library_now_reading"))}</span>` : ""}
             </div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
-              ${escapeHtml(b.original_filename)} · ${b.total_sentences > 0 ? `${pct}% read (${b.current_sentence_idx + 1}/${b.total_sentences})` : "Ready to read"}
+              ${escapeHtml(b.original_filename)} · ${escapeHtml(
+                b.total_sentences > 0
+                  ? tr("library_progress_read", {
+                      pct,
+                      current: b.current_sentence_idx + 1,
+                      total: b.total_sentences,
+                    })
+                  : tr("library_ready_to_read"),
+              )}
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:6px;">
-            <button class="btn-secondary" data-open-book="${escapeAttr(b.id)}">${isCurrent ? "Resume" : "Open"}</button>
-            <button class="icon-btn" data-delete-book="${escapeAttr(b.id)}" title="Delete from library">${Icons.trash()}</button>
+            <button class="btn-secondary" data-open-book="${escapeAttr(b.id)}">${escapeHtml(isCurrent ? tr("library_resume") : tr("library_open"))}</button>
+            <button class="icon-btn" data-delete-book="${escapeAttr(b.id)}" title="${escapeAttr(tr("library_delete_tooltip"))}">${Icons.trash()}</button>
           </div>
         </div>
       `;
@@ -179,7 +190,7 @@ function renderLibraryList(container: HTMLElement, handlers: LibraryHandlers): v
         state.library = await invoke<BookMeta[]>("delete_book", { bookId: id });
       } catch (err) {
         btn.disabled = false;
-        handlers.onToast?.(`Delete failed: ${String(err)}`);
+        handlers.onToast?.(tr("library_delete_failed", { error: String(err) }));
         return;
       }
       if (state.activeBook?.id === id) {
@@ -197,18 +208,18 @@ function renderLibraryList(container: HTMLElement, handlers: LibraryHandlers): v
 export function renderLibraryModal(container: HTMLElement, handlers: LibraryHandlers): void {
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card wide mobile-page" role="dialog" aria-label="Library">
+      <div class="modal-card wide mobile-page" role="dialog" aria-label="${escapeAttr(tr("library_aria_label"))}">
         <div class="modal-header">
           <div style="display:flex;align-items:center;gap:10px;">
-            <span class="modal-title">Library</span>
+            <span class="modal-title">${escapeHtml(tr("library_title"))}</span>
             <span id="library-count-label" style="font-size:12px;color:var(--text-muted);"></span>
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <button class="btn-primary" id="btn-import-book">
               ${Icons.plus()}
-              <span>Import Book (PDF / EPUB / DOCX / TXT)</span>
+              <span>${escapeHtml(tr("library_import_btn"))}</span>
             </button>
-            <button class="icon-btn" id="btn-modal-close" title="Close">${Icons.close()}</button>
+            <button class="icon-btn" id="btn-modal-close" title="${escapeAttr(tr("common_close"))}">${Icons.close()}</button>
           </div>
         </div>
 
@@ -218,18 +229,18 @@ export function renderLibraryModal(container: HTMLElement, handlers: LibraryHand
             <input
               type="search"
               id="library-search-input"
-              placeholder="Search library by title, filename, or format..."
+              placeholder="${escapeAttr(tr("library_search_placeholder"))}"
               value="${escapeAttr(librarySearchQuery)}"
               autocomplete="off"
               spellcheck="false"
-              aria-label="Search library"
+              aria-label="${escapeAttr(tr("library_search_aria"))}"
             />
             <button
               type="button"
               class="icon-btn library-search-clear${librarySearchQuery ? "" : " hidden"}"
               id="btn-library-search-clear"
-              title="Clear search"
-              aria-label="Clear search"
+              title="${escapeAttr(tr("library_clear_search_tooltip"))}"
+              aria-label="${escapeAttr(tr("library_clear_search_tooltip"))}"
             >${Icons.close(14)}</button>
           </div>
         </div>
@@ -280,7 +291,7 @@ export function renderLibraryModal(container: HTMLElement, handlers: LibraryHand
     try {
       book = await pickAndImportBook();
     } catch (err) {
-      handlers.onToast?.(`Import failed: ${String(err)}`);
+      handlers.onToast?.(tr("toast_import_failed", { error: String(err) }));
       return;
     } finally {
       if (importBtn.isConnected) importBtn.disabled = false;

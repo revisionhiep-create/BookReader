@@ -1,8 +1,11 @@
-//! Async downloader for Phonon 31M weights and the 37 EN voice embeddings.
+//! Async downloader for Phonon 31M weights, Kyutai Pocket TTS checkpoints, and voice embeddings.
 
-use crate::models::{DownloadProgressEvent, QwenModelVariant};
+use crate::models::{AppLanguage, DownloadProgressEvent, QwenModelVariant};
 use crate::paths::AppPaths;
-use crate::voices::{EN_VOICES, find_voice, voice_download_url};
+use crate::voices::{
+    EN_VOICES, POCKET_VOICES, find_pocket_voice, find_voice, pocket_voice_download_url,
+    pocket_voice_id, voice_download_url,
+};
 use futures_util::StreamExt;
 use std::collections::HashSet;
 use std::path::Path;
@@ -77,13 +80,31 @@ fn qwen_model_files(variant: QwenModelVariant) -> Vec<(&'static str, String, u64
     ]
 }
 
-/// Tracks cumulative byte-weighted progress across all Qwen3-TTS model files.
-struct QwenProgressTracker {
+fn pocket_model_files(lang: AppLanguage) -> Result<Vec<(&'static str, String, u64)>, String> {
+    let folder = lang
+        .pocket_folder()
+        .ok_or_else(|| format!("Language {} does not use Pocket TTS", lang.code()))?;
+    Ok(vec![
+        (
+            "model.safetensors",
+            format!("https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/main/languages/{folder}/model.safetensors"),
+            219_029_196,
+        ),
+        (
+            "tokenizer.json",
+            format!("https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/main/languages/{folder}/tokenizer.json"),
+            246_403,
+        ),
+    ])
+}
+
+/// Tracks cumulative byte-weighted progress across multi-file model downloads.
+struct MultiFileProgressTracker {
     file_totals: Vec<u64>,
     completed_bytes: u64,
 }
 
-impl QwenProgressTracker {
+impl MultiFileProgressTracker {
     fn new(estimates: Vec<u64>) -> Self {
         Self {
             file_totals: estimates,
@@ -169,7 +190,43 @@ impl DownloadManager {
         })
     }
 
+    /// Downloads Phonon 31M (`en`) or Kyutai Pocket TTS (`fr|de|es|pt|it|nl`) and its flagship voice.
+    pub async fn download_language_model(
+        &self,
+        app: &AppHandle,
+        paths: &AppPaths,
+        lang: AppLanguage,
+        default_voice_id: Option<&str>,
+    ) -> Result<(), String> {
+        if lang == AppLanguage::En {
+            let vid = default_voice_id.unwrap_or_else(|| lang.default_voice_id());
+            self.download_phonon_model_inner(Some(app), paths, Some(vid))
+                .await
+        } else {
+            self.download_pocket_model_inner(Some(app), paths, lang, default_voice_id)
+                .await
+        }
+    }
+
+    /// Headless variant of [`Self::download_language_model`] used by tests and self-tests.
+    #[allow(dead_code)]
+    pub async fn download_language_model_headless(
+        &self,
+        paths: &AppPaths,
+        lang: AppLanguage,
+        default_voice_id: Option<&str>,
+    ) -> Result<(), String> {
+        if lang == AppLanguage::En {
+            self.download_phonon_model_inner(None, paths, default_voice_id)
+                .await
+        } else {
+            self.download_pocket_model_inner(None, paths, lang, default_voice_id)
+                .await
+        }
+    }
+
     /// Downloads Phonon 31M (`q8` GGUF + config + tokenizer + default voice) and the active voice.
+    #[allow(dead_code)]
     pub async fn download_phonon_model(
         &self,
         app: &AppHandle,
@@ -188,6 +245,101 @@ impl DownloadManager {
     ) -> Result<(), String> {
         self.download_phonon_model_inner(None, paths, default_voice_id)
             .await
+    }
+
+    async fn download_pocket_model_inner(
+        &self,
+        app: Option<&AppHandle>,
+        paths: &AppPaths,
+        lang: AppLanguage,
+        default_voice_id: Option<&str>,
+    ) -> Result<(), String> {
+        let _guard = self.acquire_slot(&format!("__model_{}__", lang.code()))?;
+        let files = pocket_model_files(lang)?;
+        let total_files = files.len();
+        let target_dir = paths.pocket_model_dir(lang)?;
+        let item_id = lang.model_id();
+        let mut tracker =
+            MultiFileProgressTracker::new(files.iter().map(|(_, _, est)| *est).collect());
+
+        for (idx, (filename, _, _)) in files.iter().enumerate() {
+            let dest = target_dir.join(filename);
+            if let Ok(meta) = std::fs::metadata(&dest)
+                && meta.is_file()
+                && meta.len() > 0
+            {
+                tracker.update_file_total(idx, meta.len());
+            }
+        }
+
+        if let Some(app_handle) = app {
+            let _ = app_handle.emit(
+                "download:progress",
+                DownloadProgressEvent {
+                    kind: "model".to_string(),
+                    item_id: item_id.to_string(),
+                    current_file: files[0].0.to_string(),
+                    bytes_done: 0,
+                    bytes_total: Some(tracker.total_bytes()),
+                    files_done: 0,
+                    files_total: total_files,
+                    done: false,
+                    error: None,
+                },
+            );
+        }
+
+        for (idx, (filename, url, _)) in files.iter().enumerate() {
+            let dest = target_dir.join(filename);
+            if let Ok(meta) = std::fs::metadata(&dest)
+                && meta.is_file()
+                && meta.len() > 0
+            {
+                tracker.mark_file_done(idx, meta.len());
+                continue;
+            }
+            self.download_file_inner(
+                app,
+                "model",
+                item_id,
+                filename,
+                url,
+                &dest,
+                idx,
+                total_files,
+                Some(&mut tracker),
+            )
+            .await?;
+        }
+
+        let target_vid = default_voice_id.unwrap_or_else(|| lang.default_voice_id());
+        if let Some((vlang, slug)) = AppPaths::parse_pocket_voice_id(target_vid)
+            && vlang == lang
+            && find_pocket_voice(slug).is_some()
+            && !paths.is_voice_downloaded(target_vid)
+        {
+            self.download_single_pocket_voice_inner(app, paths, lang, slug, target_vid, 0, 1)
+                .await?;
+        }
+
+        let (_, cum_total) = tracker.snapshot(0);
+        if let Some(app_handle) = app {
+            let _ = app_handle.emit(
+                "download:progress",
+                DownloadProgressEvent {
+                    kind: "model".to_string(),
+                    item_id: item_id.to_string(),
+                    current_file: "Complete".to_string(),
+                    bytes_done: cum_total,
+                    bytes_total: Some(cum_total),
+                    files_done: total_files,
+                    files_total: total_files,
+                    done: true,
+                    error: None,
+                },
+            );
+        }
+        Ok(())
     }
 
     async fn download_phonon_model_inner(
@@ -258,7 +410,7 @@ impl DownloadManager {
         let total_files = files.len();
         let target_dir = paths.qwen_model_dir(variant);
         let item_id = variant.as_id();
-        let mut tracker = QwenProgressTracker::new(files.iter().map(|(_, _, est)| *est).collect());
+        let mut tracker = MultiFileProgressTracker::new(files.iter().map(|(_, _, est)| *est).collect());
 
         for (idx, (rel_path, _, _)) in files.iter().enumerate() {
             let dest = target_dir.join(rel_path);
@@ -341,7 +493,7 @@ impl DownloadManager {
         Ok(())
     }
 
-    /// Downloads one voice `.safetensors` file on demand if missing.
+    /// Downloads one voice `.safetensors` file on demand if missing (Phonon EN or Pocket TTS).
     pub async fn download_voice(
         &self,
         app: &AppHandle,
@@ -349,6 +501,32 @@ impl DownloadManager {
         voice_id: &str,
     ) -> Result<(), String> {
         if voice_id == "default" || paths.is_voice_downloaded(voice_id) {
+            return Ok(());
+        }
+        if let Some((lang, slug)) = AppPaths::parse_pocket_voice_id(voice_id) {
+            if find_pocket_voice(slug).is_none() {
+                return Err(format!("Unknown Pocket TTS voice ID: {voice_id}"));
+            }
+            self.wait_if_voice_busy(paths, voice_id).await;
+            if paths.is_voice_downloaded(voice_id) {
+                return Ok(());
+            }
+            self.download_single_pocket_voice_inner(Some(app), paths, lang, slug, voice_id, 0, 1)
+                .await?;
+            let _ = app.emit(
+                "download:progress",
+                DownloadProgressEvent {
+                    kind: "voice".to_string(),
+                    item_id: voice_id.to_string(),
+                    current_file: format!("{slug}.safetensors"),
+                    bytes_done: 1,
+                    bytes_total: Some(1),
+                    files_done: 1,
+                    files_total: 1,
+                    done: true,
+                    error: None,
+                },
+            );
             return Ok(());
         }
         if find_voice(voice_id).is_none() {
@@ -377,21 +555,62 @@ impl DownloadManager {
         Ok(())
     }
 
-    /// Downloads all missing voices from the 37 EN voice catalog.
-    pub async fn download_all_voices(&self, app: &AppHandle, paths: &AppPaths) -> Result<(), String> {
-        let _guard = self.acquire_slot("__all_voices__")?;
-        let pending: Vec<_> = EN_VOICES
+    /// Downloads all missing voices for `lang` (37 Phonon EN voices or 27 Pocket voices).
+    pub async fn download_all_voices_for_language(
+        &self,
+        app: &AppHandle,
+        paths: &AppPaths,
+        lang: AppLanguage,
+    ) -> Result<(), String> {
+        let _guard = self.acquire_slot(&format!("__all_voices_{}__", lang.code()))?;
+        if lang == AppLanguage::En {
+            let pending: Vec<_> = EN_VOICES
+                .iter()
+                .filter(|v| !paths.is_voice_downloaded(v.voice_id))
+                .collect();
+            let total = pending.len();
+
+            for (idx, voice) in pending.iter().enumerate() {
+                self.wait_if_voice_busy(paths, voice.voice_id).await;
+                if paths.is_voice_downloaded(voice.voice_id) {
+                    continue;
+                }
+                self.download_single_voice_inner(Some(app), paths, voice.voice_id, idx, total)
+                    .await?;
+            }
+
+            let _ = app.emit(
+                "download:progress",
+                DownloadProgressEvent {
+                    kind: "voices_all".to_string(),
+                    item_id: lang.code().to_string(),
+                    current_file: "All 37 English voices ready".to_string(),
+                    bytes_done: 1,
+                    bytes_total: Some(1),
+                    files_done: total,
+                    files_total: total,
+                    done: true,
+                    error: None,
+                },
+            );
+            return Ok(());
+        }
+
+        let pending: Vec<(String, &'static str)> = POCKET_VOICES
             .iter()
-            .filter(|v| !paths.is_voice_downloaded(v.voice_id))
+            .filter_map(|v| {
+                let vid = pocket_voice_id(lang, v.slug);
+                (!paths.is_voice_downloaded(&vid)).then_some((vid, v.slug))
+            })
             .collect();
         let total = pending.len();
 
-        for (idx, voice) in pending.iter().enumerate() {
-            self.wait_if_voice_busy(paths, voice.voice_id).await;
-            if paths.is_voice_downloaded(voice.voice_id) {
+        for (idx, (vid, slug)) in pending.iter().enumerate() {
+            self.wait_if_voice_busy(paths, vid).await;
+            if paths.is_voice_downloaded(vid) {
                 continue;
             }
-            self.download_single_voice_inner(Some(app), paths, voice.voice_id, idx, total)
+            self.download_single_pocket_voice_inner(Some(app), paths, lang, slug, vid, idx, total)
                 .await?;
         }
 
@@ -399,8 +618,8 @@ impl DownloadManager {
             "download:progress",
             DownloadProgressEvent {
                 kind: "voices_all".to_string(),
-                item_id: "all".to_string(),
-                current_file: "All 37 English voices ready".to_string(),
+                item_id: lang.code().to_string(),
+                current_file: format!("All 27 {} voices ready", lang.code()),
                 bytes_done: 1,
                 bytes_total: Some(1),
                 files_done: total,
@@ -410,6 +629,37 @@ impl DownloadManager {
             },
         );
         Ok(())
+    }
+
+    async fn download_single_pocket_voice_inner(
+        &self,
+        app: Option<&AppHandle>,
+        paths: &AppPaths,
+        lang: AppLanguage,
+        slug: &str,
+        voice_id: &str,
+        file_idx: usize,
+        total_files: usize,
+    ) -> Result<(), String> {
+        let _voice_guard = self.acquire_slot(&format!("voice:{voice_id}"))?;
+        let dest = paths.pocket_voice_path(lang, slug)?;
+        if dest.is_file()
+            && std::fs::metadata(&dest).map(|m| m.len() > 0).unwrap_or(false)
+        {
+            return Ok(());
+        }
+        let url = pocket_voice_download_url(lang, slug)?;
+        self.download_file(
+            app,
+            "voice",
+            voice_id,
+            &format!("{slug}.safetensors"),
+            &url,
+            &dest,
+            file_idx,
+            total_files,
+        )
+        .await
     }
 
     async fn wait_if_voice_busy(&self, paths: &AppPaths, voice_id: &str) {
@@ -489,7 +739,7 @@ impl DownloadManager {
         dest: &Path,
         file_idx: usize,
         total_files: usize,
-        mut tracker: Option<&mut QwenProgressTracker>,
+        mut tracker: Option<&mut MultiFileProgressTracker>,
     ) -> Result<(), String> {
         let resp = self
             .client
@@ -627,7 +877,7 @@ mod tests {
         for variant in QwenModelVariant::all() {
             let files = qwen_model_files(variant);
             assert_eq!(files.len(), 8);
-            let mut tracker = QwenProgressTracker::new(files.iter().map(|(_, _, est)| *est).collect());
+            let mut tracker = MultiFileProgressTracker::new(files.iter().map(|(_, _, est)| *est).collect());
             tracker.update_file_total(0, 2_800);
             tracker.update_file_total(3, 2_770_000);
 

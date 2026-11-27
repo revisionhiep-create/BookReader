@@ -253,6 +253,7 @@ fn is_known_abbreviation(prefix_before_dot: &str) -> bool {
     }
     matches!(
         lower.as_str(),
+        // English
         "mr" | "mrs"
             | "ms"
             | "dr"
@@ -277,6 +278,81 @@ fn is_known_abbreviation(prefix_before_dot: &str) -> bool {
             | "vol"
             | "ch"
             | "pp"
+            // French
+            | "m"
+            | "mme"
+            | "mmes"
+            | "mlle"
+            | "mlles"
+            | "mgr"
+            | "cie"
+            | "cf"
+            | "env"
+            | "art"
+            | "av"
+            | "bd"
+            | "chap"
+            | "tél"
+            | "tel"
+            | "éd"
+            // German
+            | "bzw"
+            | "ca"
+            | "evtl"
+            | "ggf"
+            | "hr"
+            | "fr"
+            | "inkl"
+            | "mio"
+            | "mrd"
+            | "nr"
+            | "sog"
+            | "usw"
+            | "vgl"
+            | "zzt"
+            | "str"
+            | "abs"
+            | "geb"
+            | "gest"
+            // Spanish & Portuguese
+            | "sra"
+            | "srta"
+            | "srs"
+            | "sras"
+            | "dra"
+            | "ud"
+            | "uds"
+            | "vd"
+            | "vds"
+            | "atte"
+            | "ej"
+            | "pág"
+            | "págs"
+            | "núm"
+            | "cap"
+            | "avda"
+            | "profa"
+            | "eng"
+            | "obs"
+            | "ltda"
+            // Italian
+            | "sig"
+            | "dott"
+            | "ing"
+            | "avv"
+            | "arch"
+            | "pag"
+            | "pagg"
+            | "ecc"
+            // Dutch
+            | "dhr"
+            | "mevr"
+            | "mw"
+            | "ir"
+            | "drs"
+            | "bijv"
+            | "enz"
+            | "blz"
     )
 }
 
@@ -361,5 +437,20 @@ mod tests {
     fn splits_cjk_sentence_terminators() {
         let parts = split_sentences("第一句话。第二句话！第三句话？");
         assert_eq!(parts, vec!["第一句话。", "第二句话！", "第三句话？"]);
+    }
+
+    #[test]
+    fn preserves_european_abbreviations_during_sentence_splitting() {
+        assert_eq!(
+            split_sentences("Mme. Dupont est arrivée. Ensuite, Dr. Meyer bzw. Hr. Klein kamen."),
+            vec![
+                "Mme. Dupont est arrivée.",
+                "Ensuite, Dr. Meyer bzw. Hr. Klein kamen.",
+            ]
+        );
+        assert_eq!(
+            split_sentences("Sra. García habló con Dott. Rossi y dhr. Bakker."),
+            vec!["Sra. García habló con Dott. Rossi y dhr. Bakker."]
+        );
     }
 }

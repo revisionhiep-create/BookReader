@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { Icons } from "../icons";
 import { state } from "../state";
 
@@ -24,11 +25,11 @@ export function renderSearchBar(container: HTMLElement, handlers: SearchHandlers
         : `${state.searchCursor + 1} / ${state.searchHits.length}`;
 
   container.innerHTML = `
-    <input type="text" id="doc-search-input" placeholder="Search in book..." value="${escapeAttr(state.searchQuery)}" />
+    <input type="text" id="doc-search-input" placeholder="${escapeAttr(tr("search_placeholder"))}" value="${escapeAttr(state.searchQuery)}" />
     <span class="search-count">${countText}</span>
-    <button class="icon-btn" id="btn-search-prev" title="Previous match" ${state.searchHits.length === 0 ? "disabled" : ""}>${Icons.chevronUp()}</button>
-    <button class="icon-btn" id="btn-search-next" title="Next match" ${state.searchHits.length === 0 ? "disabled" : ""}>${Icons.chevronDown()}</button>
-    <button class="icon-btn" id="btn-search-close" title="Close Search (Esc)">${Icons.close(15)}</button>
+    <button class="icon-btn" id="btn-search-prev" title="${escapeAttr(tr("search_prev"))}" ${state.searchHits.length === 0 ? "disabled" : ""}>${Icons.chevronUp()}</button>
+    <button class="icon-btn" id="btn-search-next" title="${escapeAttr(tr("search_next"))}" ${state.searchHits.length === 0 ? "disabled" : ""}>${Icons.chevronDown()}</button>
+    <button class="icon-btn" id="btn-search-close" title="${escapeAttr(tr("search_close"))}">${Icons.close(15)}</button>
   `;
 
   const input = container.querySelector<HTMLInputElement>("#doc-search-input")!;

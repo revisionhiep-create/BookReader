@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { invoke, openDialog, saveDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { state } from "../state";
@@ -40,7 +41,7 @@ export function renderRulesModal(
   handlers: RulesModalHandlers,
 ): void {
   const isPron = mode === "pronunciation";
-  const title = isPron ? "Pronunciation" : "Ignore Words";
+  const title = isPron ? tr("rules_pronunciation_title") : tr("rules_ignore_title");
   const q = searchFilter.trim().toLowerCase();
 
   const rows = isPron
@@ -54,40 +55,40 @@ export function renderRulesModal(
 
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card mobile-page" role="dialog" aria-label="${title}">
+      <div class="modal-card mobile-page" role="dialog" aria-label="${escapeAttr(title)}">
         <div class="modal-header">
           <button class="btn-secondary" style="padding:4px 9px;" id="btn-rules-back">
             ${Icons.chevronLeft()}
-            <span>Back</span>
+            <span>${escapeHtml(tr("common_back"))}</span>
           </button>
-          <span class="modal-title">${title}</span>
-          <button class="icon-btn" id="btn-rules-close" title="Close">${Icons.close()}</button>
+          <span class="modal-title">${escapeHtml(title)}</span>
+          <button class="icon-btn" id="btn-rules-close" title="${escapeAttr(tr("common_close"))}">${Icons.close()}</button>
         </div>
 
         <div class="modal-body">
           <div class="rules-toolbar">
-            <input type="text" id="rules-search" placeholder="Search ${isPron ? "rules" : "ignored words"}..." value="${escapeAttr(searchFilter)}" />
-            <button class="icon-btn" id="btn-rules-import" title="Import JSON">${Icons.downloadTray()}</button>
-            <button class="icon-btn" id="btn-rules-export" title="Export JSON">${Icons.uploadTray()}</button>
-            <button class="icon-btn" id="btn-rules-delete" title="Delete selected" ${selectedIds.size === 0 ? "disabled" : ""}>${Icons.trash()}</button>
+            <input type="text" id="rules-search" placeholder="${escapeAttr(isPron ? tr("rules_search_pron") : tr("rules_search_ignore"))}" value="${escapeAttr(searchFilter)}" />
+            <button class="icon-btn" id="btn-rules-import" title="${escapeAttr(tr("rules_import_json"))}">${Icons.downloadTray()}</button>
+            <button class="icon-btn" id="btn-rules-export" title="${escapeAttr(tr("rules_export_json"))}">${Icons.uploadTray()}</button>
+            <button class="icon-btn" id="btn-rules-delete" title="${escapeAttr(tr("rules_delete_selected"))}" ${selectedIds.size === 0 ? "disabled" : ""}>${Icons.trash()}</button>
           </div>
 
           <div class="rules-list">
             ${
               rows.length === 0
                 ? `<div style="padding:28px;text-align:center;color:var(--text-muted);font-size:13px;">
-                     No ${isPron ? "pronunciation rules" : "ignored words"} yet. Add one below.
+                     ${escapeHtml(isPron ? tr("rules_empty_pron") : tr("rules_empty_ignore"))}
                    </div>`
                 : rows
                     .map((r) => {
                       const checked = selectedIds.has(r.id) ? "checked" : "";
                       const flags = [
-                        r.match_case ? "Aa" : "",
-                        r.ignore_word_boundary ? "No \\b" : "",
-                        r.is_regex ? "Regex" : "",
+                        r.match_case ? tr("rules_flag_case") : "",
+                        r.ignore_word_boundary ? tr("rules_flag_boundary") : "",
+                        r.is_regex ? tr("rules_flag_regex") : "",
                       ]
                         .filter(Boolean)
-                        .map((f) => `<span class="flag-tag">${f}</span>`)
+                        .map((f) => `<span class="flag-tag">${escapeHtml(f)}</span>`)
                         .join("");
 
                       if (isPron) {
@@ -97,7 +98,7 @@ export function renderRulesModal(
                             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(pr.source)}</span>
                             <span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(pr.replace)}</span>
                             <div class="rule-flags">${flags}</div>
-                            <input type="checkbox" class="rule-select" data-rid="${pr.id}" title="Select for deletion" aria-label="Select rule to delete" ${checked} />
+                            <input type="checkbox" class="rule-select" data-rid="${pr.id}" title="${escapeAttr(tr("rules_select_delete_tooltip"))}" aria-label="${escapeAttr(tr("rules_select_delete_aria"))}" ${checked} />
                           </div>
                         `;
                       } else {
@@ -106,7 +107,7 @@ export function renderRulesModal(
                           <div class="rule-row ignore-mode${editingId === ig.id ? " editing" : ""}" data-edit-id="${ig.id}">
                             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ig.pattern)}</span>
                             <div class="rule-flags">${flags}</div>
-                            <input type="checkbox" class="rule-select" data-rid="${ig.id}" title="Select for deletion" aria-label="Select rule to delete" ${checked} />
+                            <input type="checkbox" class="rule-select" data-rid="${ig.id}" title="${escapeAttr(tr("rules_select_delete_tooltip"))}" aria-label="${escapeAttr(tr("rules_select_delete_aria"))}" ${checked} />
                           </div>
                         `;
                       }
@@ -118,40 +119,38 @@ export function renderRulesModal(
 
         <div class="modal-footer">
           <div class="rule-input-row">
-            <input type="text" id="draft-source" placeholder="${isPron ? "source word" : "word or pattern to ignore"}" value="${escapeAttr(draftSource)}" />
+            <input type="text" id="draft-source" placeholder="${escapeAttr(isPron ? tr("rules_source_placeholder") : tr("rules_ignore_placeholder"))}" value="${escapeAttr(draftSource)}" />
             ${
               isPron
                 ? `
               <div class="replace-wrap">
-                <input type="text" id="draft-replace" placeholder="replace" value="${escapeAttr(draftReplace)}" />
-                <button class="inline-play-btn" id="btn-preview-pron" title="Preview replacement with active voice">${Icons.play(11)}</button>
+                <input type="text" id="draft-replace" placeholder="${escapeAttr(tr("rules_replace_placeholder"))}" value="${escapeAttr(draftReplace)}" />
+                <button class="inline-play-btn" id="btn-preview-pron" title="${escapeAttr(tr("rules_preview_tooltip"))}">${Icons.play(11)}</button>
               </div>
             `
                 : ""
             }
-            <button class="btn-primary" id="btn-save-rule">${editingId ? "Update" : "Add"}</button>
-            ${editingId ? `<button class="btn-secondary" id="btn-cancel-edit">Cancel</button>` : ""}
+            <button class="btn-primary" id="btn-save-rule">${escapeHtml(editingId ? tr("rules_btn_update") : tr("rules_btn_add"))}</button>
+            ${editingId ? `<button class="btn-secondary" id="btn-cancel-edit">${escapeHtml(tr("common_cancel"))}</button>` : ""}
           </div>
 
           <div class="checkbox-row">
             <label class="checkbox-label">
               <input type="checkbox" id="chk-match-case" ${draftMatchCase ? "checked" : ""} />
-              <span>Match Case</span>
+              <span>${escapeHtml(tr("rules_match_case"))}</span>
             </label>
             <label class="checkbox-label">
               <input type="checkbox" id="chk-ignore-boundary" ${draftIgnoreBoundary ? "checked" : ""} />
-              <span>Ignore Word Boundary</span>
+              <span>${escapeHtml(tr("rules_ignore_boundary"))}</span>
             </label>
             <label class="checkbox-label">
               <input type="checkbox" id="chk-is-regex" ${draftIsRegex ? "checked" : ""} />
-              <span>Use Regex</span>
+              <span>${escapeHtml(tr("rules_use_regex"))}</span>
             </label>
           </div>
-          <div class="rules-hint">${
-            editingId
-              ? "Editing rule — click Update to apply changes. All saved rules are active automatically."
-              : "All saved rules are active. Click a row to edit, or check boxes on the right to delete."
-          }</div>
+          <div class="rules-hint">${escapeHtml(
+            editingId ? tr("rules_hint_editing") : tr("rules_hint_default"),
+          )}</div>
           ${validationError ? `<div class="error-text">${escapeHtml(validationError)}</div>` : ""}
         </div>
       </div>
@@ -243,14 +242,14 @@ export function renderRulesModal(
     try {
       await invoke("tts_preview_text", { text: sample, voiceId: null });
     } catch (err) {
-      handlers.onToast(`Preview failed: ${String(err)}`);
+      handlers.onToast(tr("voices_toast_preview_err", { error: String(err) }));
     }
   });
 
   const saveRule = async () => {
     const pat = draftSource.trim();
     if (!pat) {
-      validationError = isPron ? "Enter a source word or pattern" : "Enter a word or pattern to ignore";
+      validationError = isPron ? tr("rules_err_empty_pron") : tr("rules_err_empty_ignore");
       renderRulesModal(container, mode, handlers);
       return;
     }
@@ -307,7 +306,7 @@ export function renderRulesModal(
     validationError = "";
     handlers.onUpdated();
     renderRulesModal(container, mode, handlers);
-    handlers.onToast(wasEditing ? "Rule updated" : "Rule added");
+    handlers.onToast(wasEditing ? tr("rules_toast_updated") : tr("rules_toast_added"));
   };
 
   container.querySelector("#btn-save-rule")?.addEventListener("click", () => {
@@ -349,9 +348,9 @@ export function renderRulesModal(
       });
       if (!target) return;
       await invoke("export_rules_json", { kind: mode, path: target });
-      handlers.onToast("Rules exported");
+      handlers.onToast(tr("rules_toast_exported"));
     } catch (err) {
-      handlers.onToast(`Export failed: ${String(err)}`);
+      handlers.onToast(tr("toast_export_error", { error: String(err) }));
     }
   });
 
@@ -371,9 +370,10 @@ export function renderRulesModal(
       state.ignoreRules = boot.ignore_rules;
       handlers.onUpdated();
       renderRulesModal(container, mode, handlers);
-      handlers.onToast(`Imported ${count} rule${count === 1 ? "" : "s"}`);
+      const noun = count === 1 ? tr("rules_rule_singular") : tr("rules_rule_plural");
+      handlers.onToast(tr("rules_toast_imported", { count, noun }));
     } catch (err) {
-      handlers.onToast(`Import failed: ${String(err)}`);
+      handlers.onToast(tr("toast_import_failed", { error: String(err) }));
     }
   });
 }

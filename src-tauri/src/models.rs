@@ -118,6 +118,147 @@ impl Default for TypographySettings {
     }
 }
 
+/// Supported TTS and UI languages in BookReader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AppLanguage {
+    #[default]
+    En,
+    Fr,
+    De,
+    Es,
+    Pt,
+    It,
+    Nl,
+}
+
+impl AppLanguage {
+    pub fn all() -> [Self; 7] {
+        [
+            Self::En,
+            Self::Fr,
+            Self::De,
+            Self::Es,
+            Self::Pt,
+            Self::It,
+            Self::Nl,
+        ]
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::En => "en",
+            Self::Fr => "fr",
+            Self::De => "de",
+            Self::Es => "es",
+            Self::Pt => "pt",
+            Self::It => "it",
+            Self::Nl => "nl",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code.trim().to_ascii_lowercase().as_str() {
+            "en" => Some(Self::En),
+            "fr" => Some(Self::Fr),
+            "de" => Some(Self::De),
+            "es" => Some(Self::Es),
+            "pt" => Some(Self::Pt),
+            "it" => Some(Self::It),
+            "nl" => Some(Self::Nl),
+            _ => None,
+        }
+    }
+
+    pub fn pocket_folder(self) -> Option<&'static str> {
+        match self {
+            Self::En => None,
+            Self::Fr => Some("french"),
+            Self::De => Some("german"),
+            Self::Es => Some("spanish"),
+            Self::Pt => Some("portuguese"),
+            Self::It => Some("italian"),
+            Self::Nl => Some("dutch"),
+        }
+    }
+
+    pub fn engine_id(self) -> &'static str {
+        match self {
+            Self::En => "phonon",
+            _ => "pocket",
+        }
+    }
+
+    pub fn model_id(self) -> &'static str {
+        match self {
+            Self::En => "phonon-31m-en",
+            Self::Fr => "pocket-tts-fr",
+            Self::De => "pocket-tts-de",
+            Self::Es => "pocket-tts-es",
+            Self::Pt => "pocket-tts-pt",
+            Self::It => "pocket-tts-it",
+            Self::Nl => "pocket-tts-nl",
+        }
+    }
+
+    pub fn estimated_size_mb(self) -> u64 {
+        match self {
+            Self::En => 65,
+            _ => 209,
+        }
+    }
+
+    pub fn default_voice_id(self) -> &'static str {
+        match self {
+            Self::En => "LMDIYE0Oa377Qh6Z",
+            Self::Fr => "pocket:fr:estelle",
+            Self::De => "pocket:de:juergen",
+            Self::Es => "pocket:es:lola",
+            Self::Pt => "pocket:pt:rafael",
+            Self::It => "pocket:it:giovanni",
+            Self::Nl => "pocket:nl:daan",
+        }
+    }
+
+    pub fn ptts_lang(self) -> ptts::preprocess::Lang {
+        match self {
+            Self::En => ptts::preprocess::Lang::En,
+            Self::Fr => ptts::preprocess::Lang::Fr,
+            Self::De => ptts::preprocess::Lang::De,
+            Self::Es => ptts::preprocess::Lang::Es,
+            Self::Pt => ptts::preprocess::Lang::Pt,
+            Self::It => ptts::preprocess::Lang::It,
+            Self::Nl => ptts::preprocess::Lang::Nl,
+        }
+    }
+
+    #[cfg_attr(
+        any(not(feature = "voice-cloning"), target_os = "android"),
+        allow(dead_code)
+    )]
+    pub fn qwen_language(self) -> &'static str {
+        match self {
+            Self::En => "english",
+            Self::Fr => "french",
+            Self::De => "german",
+            Self::Es => "spanish",
+            Self::Pt | Self::It | Self::Nl => "auto",
+        }
+    }
+}
+
+/// Download and load readiness status for one TTS language model.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LanguageModelStatus {
+    pub language: AppLanguage,
+    pub engine: String,
+    pub model_id: String,
+    pub ready: bool,
+    pub loaded: bool,
+    pub estimated_size_mb: u64,
+    pub default_voice_id: String,
+}
+
 /// Selectable local Qwen3-TTS base model size for voice cloning & playback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum QwenModelVariant {
@@ -188,6 +329,8 @@ impl QwenModelVariant {
 #[serde(default)]
 pub struct Settings {
     pub theme: String,
+    pub ui_language: Option<AppLanguage>,
+    pub tts_language: AppLanguage,
     pub voice_id: String,
     pub qwen_model_variant: QwenModelVariant,
     pub speed: f32,
@@ -209,6 +352,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: "dark".to_string(),
+            ui_language: None,
+            tts_language: AppLanguage::En,
             voice_id: "LMDIYE0Oa377Qh6Z".to_string(), // Easton (en-us male)
             qwen_model_variant: QwenModelVariant::default(),
             speed: 1.0,
@@ -447,6 +592,7 @@ pub struct DocumentPayload {
 pub struct VoiceInfo {
     pub voice_id: String,
     pub name: String,
+    pub language: String,
     pub locale: String,
     pub gender: String,
     pub age: String,
@@ -454,6 +600,7 @@ pub struct VoiceInfo {
     pub downloaded: bool,
     pub engine: String,
     pub is_cloned: bool,
+    pub is_native: bool,
 }
 
 /// Persisted metadata for a user-created Qwen3-TTS cloned voice.
@@ -550,11 +697,20 @@ pub struct DeleteClonedVoiceResponse {
     pub settings: Settings,
 }
 
+/// Response returned after switching the active TTS language.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetTtsLanguageResponse {
+    pub settings: Settings,
+    pub voices: Vec<VoiceInfo>,
+    pub language_models: Vec<LanguageModelStatus>,
+}
+
 /// Current runtime setup & asset availability returned to frontend on startup.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppBootstrap {
     pub model_ready: bool,
     pub engine_loaded: bool,
+    pub language_models: Vec<LanguageModelStatus>,
     pub qwen_model_variant: QwenModelVariant,
     pub qwen_model_ready: bool,
     pub qwen_device_label: String,
@@ -658,4 +814,46 @@ pub struct SleepTimerStatus {
     pub active: bool,
     pub mode: String, // "off" | "minutes" | "end_of_chapter"
     pub remaining_sec: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_language_metadata_and_serde_round_trip() {
+        assert_eq!(AppLanguage::all().len(), 7);
+        assert_eq!(AppLanguage::En.pocket_folder(), None);
+        assert_eq!(AppLanguage::En.engine_id(), "phonon");
+        assert_eq!(AppLanguage::En.model_id(), "phonon-31m-en");
+        assert_eq!(AppLanguage::En.estimated_size_mb(), 65);
+        assert_eq!(AppLanguage::En.qwen_language(), "english");
+
+        let expected = [
+            (AppLanguage::Fr, "fr", "french", "pocket:fr:estelle", "french"),
+            (AppLanguage::De, "de", "german", "pocket:de:juergen", "german"),
+            (AppLanguage::Es, "es", "spanish", "pocket:es:lola", "spanish"),
+            (AppLanguage::Pt, "pt", "portuguese", "pocket:pt:rafael", "auto"),
+            (AppLanguage::It, "it", "italian", "pocket:it:giovanni", "auto"),
+            (AppLanguage::Nl, "nl", "dutch", "pocket:nl:daan", "auto"),
+        ];
+        for (lang, code, folder, def_vid, qwen_lang) in expected {
+            assert_eq!(lang.code(), code);
+            assert_eq!(AppLanguage::from_code(&code.to_uppercase()), Some(lang));
+            assert_eq!(lang.pocket_folder(), Some(folder));
+            assert_eq!(lang.engine_id(), "pocket");
+            assert_eq!(lang.model_id(), format!("pocket-tts-{code}"));
+            assert_eq!(lang.estimated_size_mb(), 209);
+            assert_eq!(lang.default_voice_id(), def_vid);
+            assert_eq!(lang.qwen_language(), qwen_lang);
+            let _ = lang.ptts_lang();
+        }
+        assert_eq!(AppLanguage::from_code("xx"), None);
+
+        // Legacy Settings JSON without ui_language/tts_language deserializes with clean defaults.
+        let legacy: Settings = serde_json::from_str(r#"{"theme":"light","speed":1.2}"#).unwrap();
+        assert_eq!(legacy.ui_language, None);
+        assert_eq!(legacy.tts_language, AppLanguage::En);
+        assert_eq!(legacy.theme, "light");
+    }
 }

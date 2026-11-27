@@ -1,8 +1,9 @@
+import { tr } from "../i18n";
 import { invoke } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { state } from "../state";
 import type { BookMeta } from "../types";
-import { escapeHtml } from "./sidebar";
+import { escapeAttr, escapeHtml } from "./sidebar";
 
 export interface TocModalHandlers {
   onJumpSentence: (sentenceIdx: number) => void;
@@ -20,35 +21,35 @@ export function renderTocBookmarksModal(
 
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card mobile-page toc-modal-card" data-toc-tab="${activeMobileTab}" role="dialog" aria-label="Chapters and Bookmarks">
+      <div class="modal-card mobile-page toc-modal-card" data-toc-tab="${activeMobileTab}" role="dialog" aria-label="${escapeAttr(tr("toc_aria_label"))}">
         <div class="modal-header">
-          <span class="modal-title">Chapters &amp; Bookmarks</span>
+          <span class="modal-title">${escapeHtml(tr("toc_title"))}</span>
           <button class="icon-btn" id="btn-modal-close">${Icons.close()}</button>
         </div>
 
         <div class="toc-mobile-tabs">
           <button type="button" class="toc-tab-btn ${activeMobileTab === "chapters" ? "active" : ""}" data-toc-tab-btn="chapters">
-            Chapters (${state.toc.length})
+            ${escapeHtml(tr("toc_tab_chapters", { count: state.toc.length }))}
           </button>
           <button type="button" class="toc-tab-btn ${activeMobileTab === "bookmarks" ? "active" : ""}" data-toc-tab-btn="bookmarks">
-            Bookmarks (${book?.bookmarks.length ?? 0})
+            ${escapeHtml(tr("toc_tab_bookmarks", { count: book?.bookmarks.length ?? 0 }))}
           </button>
         </div>
 
         <div class="modal-body">
           <div class="toc-section toc-section-bookmarks">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-              <strong style="font-size:13px;">Bookmarks</strong>
+              <strong style="font-size:13px;">${escapeHtml(tr("toc_bookmarks_heading"))}</strong>
               ${
                 book
-                  ? `<button class="btn-secondary" id="btn-bm-here">${Icons.bookmark(true)}<span>Bookmark Here</span></button>`
+                  ? `<button class="btn-secondary" id="btn-bm-here">${Icons.bookmark(true)}<span>${escapeHtml(tr("toc_bookmark_here"))}</span></button>`
                   : ""
               }
             </div>
 
             ${
               !book || book.bookmarks.length === 0
-                ? `<div style="font-size:12.5px;color:var(--text-muted);">No bookmarks saved for this book yet.</div>`
+                ? `<div style="font-size:12.5px;color:var(--text-muted);">${escapeHtml(tr("toc_bookmarks_empty"))}</div>`
                 : book.bookmarks
                     .map(
                       (bm) => `
@@ -56,10 +57,10 @@ export function renderTocBookmarksModal(
                       <div style="cursor:pointer;flex:1;" data-jump-sid="${bm.sentence_idx}">
                         <div><strong>${escapeHtml(bm.label)}</strong></div>
                         <div style="font-size:11.5px;color:var(--text-muted);">
-                          Sentence ${bm.sentence_idx + 1}${bm.page ? ` · Page ${bm.page}` : ""}
+                          ${escapeHtml(tr("toc_bookmark_pos", { sentence: bm.sentence_idx + 1 }))}${bm.page ? ` · ${escapeHtml(tr("toc_bookmark_page", { page: bm.page }))}` : ""}
                         </div>
                       </div>
-                      <button class="icon-btn" data-del-bm="${bm.id}" title="Delete bookmark">${Icons.trash()}</button>
+                      <button class="icon-btn" data-del-bm="${bm.id}" title="${escapeAttr(tr("toc_delete_bookmark"))}">${Icons.trash()}</button>
                     </div>
                   `,
                     )
@@ -68,16 +69,16 @@ export function renderTocBookmarksModal(
           </div>
 
           <div class="toc-section toc-section-chapters">
-            <strong style="font-size:13px;display:block;margin-top:8px;margin-bottom:6px;">Table of Contents</strong>
+            <strong style="font-size:13px;display:block;margin-top:8px;margin-bottom:6px;">${escapeHtml(tr("toc_heading"))}</strong>
             ${
               state.toc.length === 0
-                ? `<div style="font-size:12.5px;color:var(--text-muted);">No chapter headings found in this book.</div>`
+                ? `<div style="font-size:12.5px;color:var(--text-muted);">${escapeHtml(tr("toc_chapters_empty"))}</div>`
                 : state.toc
                     .map(
                       (entry) => `
                     <button class="nav-btn" style="padding-left:${10 + (entry.level - 1) * 14}px;" data-jump-sid="${entry.sentence_idx}">
                       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(entry.title)}</span>
-                      ${entry.page ? `<span class="badge">p.${entry.page}</span>` : ""}
+                      ${entry.page ? `<span class="badge">${escapeHtml(tr("toc_page_short", { page: entry.page }))}</span>` : ""}
                     </button>
                   `,
                     )
@@ -105,7 +106,7 @@ export function renderTocBookmarksModal(
     if (!book) return;
     const idx = state.tts.sentence_idx;
     const sent = state.sentences[idx];
-    const snippet = sent ? sent.text.slice(0, 44) : `Position ${idx + 1}`;
+    const snippet = sent ? sent.text.slice(0, 44) : tr("toc_position_label", { pos: idx + 1 });
     const updated = await invoke<BookMeta>("add_bookmark", {
       bookId: book.id,
       label: snippet,

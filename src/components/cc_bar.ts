@@ -1,7 +1,8 @@
+import { getActiveUiLanguage, tr } from "../i18n";
 import { Icons } from "../icons";
 import { persistSettings, state } from "../state";
 import type { TtsStateEvent } from "../types";
-import { escapeHtml } from "./sidebar";
+import { escapeAttr, escapeHtml } from "./sidebar";
 
 let mountedKey = "";
 let mountedSentenceIdx = -1;
@@ -246,7 +247,7 @@ export function renderCcBar(container: HTMLElement): void {
   const activeWord = useLiveClock
     ? findWordAtMs(timelineWordStartsMs, currentEstimatedPlaybackMs(performance.now()))
     : state.tts.word_idx;
-  const key = `${idx}|${fontSize}|${sentenceText}`;
+  const key = `${getActiveUiLanguage()}|${idx}|${fontSize}|${sentenceText}`;
 
   if (key === mountedKey && mountedSpans.length > 0 && mountedSpans[0].isConnected) {
     if (!useLiveClock) {
@@ -277,7 +278,7 @@ export function renderCcBar(container: HTMLElement): void {
     .join(" ");
 
   container.innerHTML = `
-    <button class="cc-close" id="btn-cc-close" title="Hide Closed Captions">${Icons.close(14)}</button>
+    <button class="cc-close" id="btn-cc-close" title="${escapeAttr(tr("cc_hide_tooltip"))}">${Icons.close(14)}</button>
     <div class="cc-text" style="font-size:${fontSize}px;">${wordsHtml || escapeHtml(sentenceText)}</div>
   `;
 

@@ -1,3 +1,4 @@
+import { setActiveUiLanguage } from "./i18n";
 import { invoke } from "./tauri_bridge";
 import type {
   ActiveModal,
@@ -47,6 +48,8 @@ export interface ClientState {
 
 const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
+  ui_language: null,
+  tts_language: "en",
   voice_id: "LMDIYE0Oa377Qh6Z",
   qwen_model_variant: "1.7b",
   speed: 1.0,
@@ -155,6 +158,11 @@ export function notify(): void {
   }
 }
 
+export function applySettingsSideEffects(settings: Settings): void {
+  document.documentElement.setAttribute("data-theme", settings.theme);
+  setActiveUiLanguage(settings.ui_language);
+}
+
 let settingsRev = 0;
 let persistQueue: Promise<void> = Promise.resolve();
 
@@ -162,7 +170,7 @@ export function persistSettings(patch: Partial<Settings>): Promise<void> {
   const rev = ++settingsRev;
   const next: Settings = { ...state.settings, ...patch };
   state.settings = next;
-  document.documentElement.setAttribute("data-theme", next.theme);
+  applySettingsSideEffects(next);
   notify();
 
   const task = persistQueue.then(async () => {
@@ -171,7 +179,7 @@ export function persistSettings(patch: Partial<Settings>): Promise<void> {
       const saved = await invoke<Settings>("update_settings", { settings: next });
       if (rev === settingsRev) {
         state.settings = saved;
-        document.documentElement.setAttribute("data-theme", saved.theme);
+        applySettingsSideEffects(saved);
       }
     } catch (err) {
       console.error("Failed to persist settings:", err);

@@ -1,7 +1,7 @@
 //! Native Rust Qwen3-TTS Base voice-cloning engine built on `qwen_tts` + `candle-core`
 //! (compiled when the `voice-cloning` feature is enabled; lightweight stub otherwise).
 
-use crate::models::{AudioClipProbe, CloneVoiceRequest, ClonedVoiceMeta, QwenModelVariant};
+use crate::models::{AppLanguage, AudioClipProbe, CloneVoiceRequest, ClonedVoiceMeta, QwenModelVariant};
 use crate::paths::AppPaths;
 #[cfg(all(feature = "voice-cloning", not(target_os = "android")))]
 use crate::storage::now_unix_secs;
@@ -327,6 +327,17 @@ impl QwenCloneEngine {
         Ok(())
     }
 
+    /// Drops any loaded Qwen3-TTS model weights & prompt cache to reclaim VRAM/RAM.
+    pub fn unload(&self) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+        self.mark_unloaded();
+        self.pending_evictions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
     /// Creates a reusable Qwen3-TTS voice-clone prompt from a reference audio clip.
     pub fn clone_voice(
         &self,
@@ -412,6 +423,7 @@ impl QwenCloneEngine {
         &self,
         paths: &AppPaths,
         variant: QwenModelVariant,
+        language: AppLanguage,
         text: &str,
         voice_id: &str,
         voice_meta: Option<&ClonedVoiceMeta>,
@@ -494,7 +506,7 @@ impl QwenCloneEngine {
 
             let result = loaded
                 .model
-                .generate_voice_clone_from_text(chunk, &prompt, "english", Some(opts))
+                .generate_voice_clone_from_text(chunk, &prompt, language.qwen_language(), Some(opts))
                 .map_err(|e| format!("Qwen3-TTS synthesis failed: {e}"))?;
 
             let samples = result
@@ -615,6 +627,8 @@ impl QwenCloneEngine {
         Err("Voice cloning is disabled on this platform".to_string())
     }
 
+    pub fn unload(&self) {}
+
     pub fn clone_voice(
         &self,
         _paths: &AppPaths,
@@ -628,6 +642,7 @@ impl QwenCloneEngine {
         &self,
         _paths: &AppPaths,
         _variant: QwenModelVariant,
+        _language: AppLanguage,
         _text: &str,
         _voice_id: &str,
         _voice_meta: Option<&ClonedVoiceMeta>,

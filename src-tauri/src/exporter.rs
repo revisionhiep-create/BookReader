@@ -68,13 +68,7 @@ impl ExportManager {
     }
 
     pub fn is_exporting_cloned_voice(&self) -> bool {
-        self.active.lock().unwrap().as_ref().is_some_and(|existing| {
-            AppPaths::is_cloned_voice_id(&existing.voice_id)
-                && matches!(
-                    existing.latest.status.as_str(),
-                    "preparing" | "running" | "finalizing"
-                )
-        })
+        is_exporting_cloned_voice_in(&self.active)
     }
 
     pub fn cancel(&self) -> Result<(), String> {
@@ -161,8 +155,57 @@ impl ExportManager {
     }
 }
 
+fn is_exporting_cloned_voice_in(active: &Mutex<Option<ActiveExport>>) -> bool {
+    active.lock().unwrap().as_ref().is_some_and(|existing| {
+        AppPaths::is_cloned_voice_id(&existing.voice_id)
+            && matches!(
+                existing.latest.status.as_str(),
+                "preparing" | "running" | "finalizing"
+            )
+    })
+}
+
+fn maybe_unload_qwen_if_unused(
+    storage: &Storage,
+    engine: &PhononEngine,
+    active: &Mutex<Option<ActiveExport>>,
+) {
+    if !AppPaths::is_cloned_voice_id(&storage.settings().voice_id)
+        && !is_exporting_cloned_voice_in(active)
+    {
+        engine.unload_qwen();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_export_worker(
+    app: AppHandle,
+    storage: Arc<Storage>,
+    engine: Arc<PhononEngine>,
+    active_ref: Arc<Mutex<Option<ActiveExport>>>,
+    job_id: String,
+    cancel: Arc<AtomicBool>,
+    req: ExportRequest,
+    sentences: Vec<SentenceItem>,
+) {
+    let was_cloned_export = AppPaths::is_cloned_voice_id(&req.voice_id);
+    run_export_worker_inner(
+        app,
+        Arc::clone(&storage),
+        Arc::clone(&engine),
+        Arc::clone(&active_ref),
+        job_id,
+        cancel,
+        req,
+        sentences,
+    );
+    if was_cloned_export {
+        maybe_unload_qwen_if_unused(&storage, &engine, &active_ref);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_export_worker_inner(
     app: AppHandle,
     storage: Arc<Storage>,
     engine: Arc<PhononEngine>,
@@ -212,6 +255,9 @@ fn run_export_worker(
 
     let settings = storage.settings();
     let qwen_variant = settings.qwen_model_variant;
+    let export_lang = AppPaths::parse_pocket_voice_id(&req.voice_id)
+        .map(|(l, _)| l)
+        .unwrap_or(settings.tts_language);
     let cloned_meta = AppPaths::is_cloned_voice_id(&req.voice_id)
         .then(|| storage.get_cloned_voice(&req.voice_id))
         .flatten();
@@ -273,6 +319,7 @@ fn run_export_worker(
             ProcessedSentence::Speak(spoken_text) => {
                 match engine.synthesize(
                     storage.paths(),
+                    export_lang,
                     qwen_variant,
                     cloned_meta.as_ref(),
                     &spoken_text,
@@ -566,6 +613,49 @@ mod tests {
         mp3_sink.finish().unwrap();
         let mp3_bytes = std::fs::read(&mp3_path).unwrap();
         assert!(mp3_bytes.len() > 256);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn qwen_auto_unload_safeguard_respects_active_voice_and_active_export() {
+        let root = std::env::temp_dir().join(format!("bookreader_unload_test_{}", uuid::Uuid::new_v4()));
+        let paths = AppPaths::from_roots(root.join("appdata"), root.join("data")).unwrap();
+        let storage = Storage::load(paths).unwrap();
+        let engine = PhononEngine::new();
+        let active: Mutex<Option<ActiveExport>> = Mutex::new(None);
+
+        // Non-cloned active voice + no active export -> safe to invoke unload_qwen()
+        maybe_unload_qwen_if_unused(&storage, &engine, &active);
+        assert!(!engine.qwen().is_loaded());
+
+        // Active cloned export -> is_exporting_cloned_voice_in returns true
+        *active.lock().unwrap() = Some(ActiveExport {
+            job_id: "job1".to_string(),
+            voice_id: "clone_abc".to_string(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            latest: ExportProgressEvent {
+                job_id: "job1".to_string(),
+                book_title: "Book".to_string(),
+                format: ExportFormat::Mp3,
+                status: "running".to_string(),
+                completed_sentences: 0,
+                total_sentences: 10,
+                percent: 0.0,
+                elapsed_sec: 0.0,
+                eta_sec: None,
+                realtime_factor: 0.0,
+                bytes_written: 0,
+                output_path: "out.mp3".to_string(),
+                error: None,
+            },
+        });
+        assert!(is_exporting_cloned_voice_in(&active));
+
+        // Once export completes, is_exporting_cloned_voice_in returns false
+        active.lock().unwrap().as_mut().unwrap().latest.status = "completed".to_string();
+        assert!(!is_exporting_cloned_voice_in(&active));
+        maybe_unload_qwen_if_unused(&storage, &engine, &active);
 
         let _ = std::fs::remove_dir_all(root);
     }

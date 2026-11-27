@@ -1,3 +1,4 @@
+import { type AppLanguage, getActiveUiLanguage, tr } from "../../src/i18n";
 import { invoke } from "../../src/tauri_bridge";
 import { Icons } from "../../src/icons";
 import { formatDuration, notify, persistSettings, state } from "../../src/state";
@@ -35,8 +36,10 @@ let hostsRef: MobileHosts | null = null;
 let handlersRef: MobileChromeHandlers | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let mountedSheet: null | "quick" | "speed" | "sleep" = null;
+let mountedSheetLang: AppLanguage | null = null;
 let quickSheetStructureKey = "";
 let mountedDockMode: null | "collapsed" | "expanded" = null;
+let mountedDockLang: AppLanguage | null = null;
 let dockScrubbing = false;
 
 let lastDrawerOpenState = false;
@@ -839,18 +842,18 @@ export function syncMobileChrome(): void {
 
 function renderMobileTopbar(container: HTMLElement, handlers: MobileChromeHandlers): void {
   const hasBook = state.activeBook !== null;
-  const title = state.activeBook ? state.activeBook.title : "BookReader";
+  const title = state.activeBook ? state.activeBook.title : tr("app_title");
 
   container.innerHTML = `
     <div class="mobile-topbar">
-      <button class="icon-btn" id="m-btn-drawer" aria-label="Open menu">${Icons.menu()}</button>
+      <button class="icon-btn" id="m-btn-drawer" aria-label="${escapeAttr(tr("mobile_open_menu"))}">${Icons.menu()}</button>
       <button class="mobile-book-title-btn" id="m-btn-title" title="${escapeAttr(title)}">
         <span class="mobile-book-title-text">${escapeHtml(title)}</span>
       </button>
-      <button class="icon-btn ${state.searchOpen ? "active" : ""}" id="m-btn-search" aria-label="Search" ${hasBook ? "" : "disabled"}>
+      <button class="icon-btn ${state.searchOpen ? "active" : ""}" id="m-btn-search" aria-label="${escapeAttr(tr("mobile_search"))}" ${hasBook ? "" : "disabled"}>
         ${Icons.search()}
       </button>
-      <button class="icon-btn ${state.quickReaderSheetOpen ? "active" : ""}" id="m-btn-quick-reader" aria-label="Reader settings">
+      <button class="icon-btn ${state.quickReaderSheetOpen ? "active" : ""}" id="m-btn-quick-reader" aria-label="${escapeAttr(tr("mobile_reader_settings"))}">
         ${Icons.textAa()}
       </button>
     </div>
@@ -878,9 +881,14 @@ function renderMobileTopbar(container: HTMLElement, handlers: MobileChromeHandle
 function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers): void {
   const isPlaying = state.tts.status === "playing" || state.tts.status === "loading";
   const hasBook = state.activeBook !== null;
+  const uiLang = getActiveUiLanguage();
 
   if (state.mobileDockCollapsed) {
-    if (mountedDockMode === "collapsed" && container.querySelector(".mobile-dock-pill")) {
+    if (
+      mountedDockMode === "collapsed" &&
+      mountedDockLang === uiLang &&
+      container.querySelector(".mobile-dock-pill")
+    ) {
       const pillPlay = container.querySelector<HTMLButtonElement>("#m-pill-play");
       if (pillPlay) {
         pillPlay.disabled = !hasBook;
@@ -889,13 +897,14 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
       return;
     }
     mountedDockMode = "collapsed";
+    mountedDockLang = uiLang;
     dockScrubbing = false;
     container.innerHTML = `
       <div class="mobile-dock-pill">
-        <button class="play-btn" id="m-pill-play" aria-label="Play or Pause" ${hasBook ? "" : "disabled"}>
+        <button class="play-btn" id="m-pill-play" aria-label="${escapeAttr(tr("mobile_play_pause"))}" ${hasBook ? "" : "disabled"}>
           ${isPlaying ? Icons.pause(16) : Icons.play(16)}
         </button>
-        <button class="icon-btn" id="m-pill-expand" aria-label="Expand player controls" title="Expand player">
+        <button class="icon-btn" id="m-pill-expand" aria-label="${escapeAttr(tr("mobile_expand_player"))}" title="${escapeAttr(tr("mobile_expand_player_title"))}">
           ${Icons.chevronUp()}
         </button>
       </div>
@@ -910,13 +919,17 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
   }
 
   const activeVoice =
-    state.voices.find((v) => v.voice_id === state.settings.voice_id)?.name ?? "Default";
+    state.voices.find((v) => v.voice_id === state.settings.voice_id)?.name ?? tr("common_default");
   const total = Math.max(1, state.sentences.length);
   const curIdx = Math.min(state.tts.sentence_idx, total - 1);
   const progressPct = state.sentences.length > 0 ? ((curIdx + 1) / state.sentences.length) * 100 : 0;
   const counterText = state.sentences.length > 0 ? `${curIdx + 1} / ${state.sentences.length}` : "—";
 
-  if (mountedDockMode === "expanded" && container.querySelector("#m-progress-track")) {
+  if (
+    mountedDockMode === "expanded" &&
+    mountedDockLang === uiLang &&
+    container.querySelector("#m-progress-track")
+  ) {
     if (!dockScrubbing) {
       const fill = container.querySelector<HTMLElement>("#m-progress-track .progress-fill");
       if (fill) fill.style.width = `${progressPct.toFixed(2)}%`;
@@ -946,10 +959,11 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
   }
 
   mountedDockMode = "expanded";
+  mountedDockLang = uiLang;
   dockScrubbing = false;
   container.innerHTML = `
     <div class="mobile-player-dock">
-      <div class="mobile-scrub-hit" id="m-progress-track" title="Seek position">
+      <div class="mobile-scrub-hit" id="m-progress-track" title="${escapeAttr(tr("mobile_seek_position"))}">
         <div class="progress-track">
           <div class="progress-fill" style="width:${progressPct.toFixed(2)}%"></div>
         </div>
@@ -960,24 +974,24 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
         <span id="m-time-remaining">-${formatDuration(state.tts.remaining_est_sec)}</span>
       </div>
       <div class="mobile-dock-controls">
-        <button class="mobile-voice-pill" id="m-btn-voice" title="Select voice">
+        <button class="mobile-voice-pill" id="m-btn-voice" title="${escapeAttr(tr("toolbar_select_voice"))}">
           ${Icons.voice()}
           <span>${escapeHtml(activeVoice)}</span>
         </button>
         <div class="mobile-transport">
-          <button class="icon-btn" id="m-btn-prev" aria-label="Previous sentence" ${hasBook ? "" : "disabled"}>
+          <button class="icon-btn" id="m-btn-prev" aria-label="${escapeAttr(tr("mobile_prev_sentence"))}" ${hasBook ? "" : "disabled"}>
             ${Icons.prevSentence()}
           </button>
-          <button class="play-btn" id="m-btn-play" aria-label="Play or Pause" ${hasBook ? "" : "disabled"}>
+          <button class="play-btn" id="m-btn-play" aria-label="${escapeAttr(tr("mobile_play_pause"))}" ${hasBook ? "" : "disabled"}>
             ${isPlaying ? Icons.pause(18) : Icons.play(18)}
           </button>
-          <button class="icon-btn" id="m-btn-next" aria-label="Next sentence" ${hasBook ? "" : "disabled"}>
+          <button class="icon-btn" id="m-btn-next" aria-label="${escapeAttr(tr("mobile_next_sentence"))}" ${hasBook ? "" : "disabled"}>
             ${Icons.nextSentence()}
           </button>
         </div>
         <div class="mobile-dock-right">
-          <button class="speed-pill" id="m-btn-speed" aria-label="Playback speed">${state.settings.speed.toFixed(2)}x</button>
-          <button class="icon-btn" id="m-btn-dock-collapse" aria-label="Collapse player controls" title="Minimize player">
+          <button class="speed-pill" id="m-btn-speed" aria-label="${escapeAttr(tr("toolbar_playback_speed"))}">${state.settings.speed.toFixed(2)}x</button>
+          <button class="icon-btn" id="m-btn-dock-collapse" aria-label="${escapeAttr(tr("mobile_collapse_player"))}" title="${escapeAttr(tr("mobile_minimize_player"))}">
             ${Icons.chevronDown()}
           </button>
         </div>
@@ -1069,17 +1083,18 @@ function renderMobileSheet(container: HTMLElement, handlers: MobileChromeHandler
 function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHandlers): void {
   const s = state.settings;
   const typ = s.typography;
+  const uiLang = getActiveUiLanguage();
   const hasBook = state.activeBook !== null;
   const isPdf = state.activeBook?.format === "pdf";
   const zoomFactor = isPdf ? typ.pdf_zoom : typ.reader_zoom;
   const sleepLabel =
     state.sleepTimer.active && state.sleepTimer.mode === "minutes" && state.sleepTimer.remaining_sec !== null
-      ? `Sleep (${Math.ceil(state.sleepTimer.remaining_sec / 60)}m)`
+      ? tr("mobile_sleep_min_badge", { min: Math.ceil(state.sleepTimer.remaining_sec / 60) })
       : state.sleepTimer.active && state.sleepTimer.mode === "end_of_chapter"
-        ? "Sleep (Ch)"
-        : "Sleep Timer";
+        ? tr("mobile_sleep_chapter_badge")
+        : tr("popover_sleep_timer");
 
-  const nextStructureKey = `${isPdf}|${s.theme === "dark"}|${s.pdf_reflow}`;
+  const nextStructureKey = `${uiLang}|${isPdf}|${s.theme === "dark"}|${s.pdf_reflow}`;
   if (
     mountedSheet === "quick" &&
     quickSheetStructureKey === nextStructureKey &&
@@ -1105,7 +1120,7 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
     if (fontSlider && document.activeElement !== fontSlider) {
       fontSlider.value = String(typ.font_size);
     }
-    if (fontLbl) fontLbl.textContent = `${typ.font_size} px`;
+    if (fontLbl) fontLbl.textContent = tr("settings_unit_px", { px: typ.font_size });
 
     const lhSlider = container.querySelector<HTMLInputElement>("#m-line-height");
     const lhLbl = container.querySelector<HTMLElement>("#m-line-height-val");
@@ -1118,7 +1133,7 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
     if (ccToggle) {
       ccToggle.classList.toggle("active", s.cc_enabled);
       const span = ccToggle.querySelector("span");
-      if (span) span.textContent = s.cc_enabled ? "On" : "Off";
+      if (span) span.textContent = s.cc_enabled ? tr("common_on") : tr("common_off");
     }
     const ccSmaller = container.querySelector<HTMLButtonElement>("#m-cc-smaller");
     const ccReset = container.querySelector<HTMLButtonElement>("#m-cc-reset");
@@ -1145,23 +1160,24 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
   }
 
   mountedSheet = "quick";
+  mountedSheetLang = uiLang;
   quickSheetStructureKey = nextStructureKey;
   container.innerHTML = `
     <div class="modal-backdrop" id="m-sheet-backdrop">
-      <div class="modal-card mobile-sheet" role="dialog" aria-label="Quick Reader Controls">
+      <div class="modal-card mobile-sheet" role="dialog" aria-label="${escapeAttr(tr("mobile_quick_reader_aria"))}">
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="modal-header">
-          <span class="modal-title">Reader Appearance &amp; Tools</span>
+          <span class="modal-title">${escapeHtml(tr("mobile_quick_reader_title"))}</span>
           <button class="icon-btn" id="m-sheet-close">${Icons.close()}</button>
         </div>
 
         <div class="modal-body">
           <div class="qr-two-col">
             <button type="button" class="qr-pill-btn ${s.theme === "dark" ? "active" : ""}" id="m-theme-dark">
-              ${Icons.moon()}<span>Dark Theme</span>
+              ${Icons.moon()}<span>${escapeHtml(tr("mobile_dark_theme"))}</span>
             </button>
             <button type="button" class="qr-pill-btn ${s.theme === "light" ? "active" : ""}" id="m-theme-light">
-              ${Icons.sun()}<span>Light Theme</span>
+              ${Icons.sun()}<span>${escapeHtml(tr("mobile_light_theme"))}</span>
             </button>
           </div>
 
@@ -1170,14 +1186,14 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
               isPdf
                 ? `
               <div class="qr-two-col">
-                <button type="button" class="qr-pill-btn ${!s.pdf_reflow ? "active" : ""}" id="m-pdf-mode-original">Original Page</button>
-                <button type="button" class="qr-pill-btn ${s.pdf_reflow ? "active" : ""}" id="m-pdf-mode-reflow">Reflow Text</button>
+                <button type="button" class="qr-pill-btn ${!s.pdf_reflow ? "active" : ""}" id="m-pdf-mode-original">${escapeHtml(tr("mobile_pdf_original"))}</button>
+                <button type="button" class="qr-pill-btn ${s.pdf_reflow ? "active" : ""}" id="m-pdf-mode-reflow">${escapeHtml(tr("mobile_pdf_reflow"))}</button>
               </div>
             `
                 : ""
             }
             <div class="qr-seg-row">
-              <span style="font-size:13px;font-weight:500;">Page Zoom</span>
+              <span style="font-size:13px;font-weight:500;">${escapeHtml(tr("mobile_page_zoom"))}</span>
               <div class="qr-stepper">
                 <button type="button" id="m-zoom-out" ${hasBook ? "" : "disabled"}>${Icons.zoomOut()}</button>
                 <button type="button" class="qr-step-val" id="m-zoom-reset" ${hasBook ? "" : "disabled"}>${Math.round(zoomFactor * 100)}%</button>
@@ -1189,11 +1205,11 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
               !isPdf || s.pdf_reflow
                 ? `
               <div class="setting-row">
-                <span>Font Size — <strong id="m-font-size-val">${typ.font_size} px</strong></span>
+                <span>${escapeHtml(tr("mobile_font_size"))} — <strong id="m-font-size-val">${escapeHtml(tr("settings_unit_px", { px: typ.font_size }))}</strong></span>
                 <input type="range" id="m-font-size" min="13" max="30" step="1" value="${typ.font_size}"/>
               </div>
               <div class="setting-row">
-                <span>Line Height — <strong id="m-line-height-val">${typ.line_height.toFixed(2)}</strong></span>
+                <span>${escapeHtml(tr("mobile_line_height"))} — <strong id="m-line-height-val">${typ.line_height.toFixed(2)}</strong></span>
                 <input type="range" id="m-line-height" min="1.3" max="2.3" step="0.05" value="${typ.line_height}"/>
               </div>
             `
@@ -1203,13 +1219,13 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
 
           <div class="qr-section">
             <div class="qr-seg-row">
-              <span style="font-size:13px;font-weight:500;">Closed Captions (CC)</span>
+              <span style="font-size:13px;font-weight:500;">${escapeHtml(tr("mobile_cc_label"))}</span>
               <button type="button" class="qr-pill-btn ${s.cc_enabled ? "active" : ""}" id="m-cc-toggle" style="min-height:38px;padding:4px 14px;">
-                ${Icons.cc()}<span>${s.cc_enabled ? "On" : "Off"}</span>
+                ${Icons.cc()}<span>${escapeHtml(s.cc_enabled ? tr("common_on") : tr("common_off"))}</span>
               </button>
             </div>
             <div class="qr-seg-row">
-              <span style="font-size:13px;color:var(--text-secondary);">Caption Size</span>
+              <span style="font-size:13px;color:var(--text-secondary);">${escapeHtml(tr("mobile_caption_size"))}</span>
               <div class="qr-stepper">
                 <button type="button" id="m-cc-smaller" ${s.cc_enabled ? "" : "disabled"}>A-</button>
                 <button type="button" class="qr-step-val" id="m-cc-reset" ${s.cc_enabled ? "" : "disabled"}>${typ.cc_font_size}px</button>
@@ -1220,10 +1236,10 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
 
           <div class="qr-two-col">
             <button type="button" class="qr-pill-btn" id="m-add-bookmark" ${hasBook ? "" : "disabled"}>
-              ${Icons.bookmark(false)}<span>Bookmark Here</span>
+              ${Icons.bookmark(false)}<span>${escapeHtml(tr("toc_bookmark_here"))}</span>
             </button>
             <button type="button" class="qr-pill-btn ${state.sleepTimer.active ? "active" : ""}" id="m-open-sleep">
-              ${Icons.sleepTimer()}<span>${sleepLabel}</span>
+              ${Icons.sleepTimer()}<span>${escapeHtml(sleepLabel)}</span>
             </button>
           </div>
 
@@ -1233,11 +1249,11 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
             <div class="qr-two-col">
               ${
                 !s.pdf_reflow && s.theme === "dark"
-                  ? `<button type="button" class="qr-pill-btn ${s.pdf_invert_dark ? "active" : ""}" id="m-pdf-invert">Dark PDF Page</button>`
+                  ? `<button type="button" class="qr-pill-btn ${s.pdf_invert_dark ? "active" : ""}" id="m-pdf-invert">${escapeHtml(tr("mobile_dark_pdf_page"))}</button>`
                   : `<div></div>`
               }
               <button type="button" class="qr-pill-btn ${state.pdfMarginsEditing ? "active" : ""}" id="m-pdf-margins">
-                ${Icons.margins()}<span>Ignore Margins</span>
+                ${Icons.margins()}<span>${escapeHtml(tr("mobile_ignore_margins"))}</span>
               </button>
             </div>
           `
@@ -1278,7 +1294,7 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
   fontInput?.addEventListener("input", () => {
     const v = Math.round(parseFloat(fontInput.value));
     const lbl = container.querySelector<HTMLElement>("#m-font-size-val");
-    if (lbl) lbl.textContent = `${v} px`;
+    if (lbl) lbl.textContent = tr("settings_unit_px", { px: v });
     state.settings = { ...state.settings, typography: { ...state.settings.typography, font_size: v } };
     handlers.onTypographyChanged();
   });
@@ -1343,22 +1359,24 @@ function syncSpeedSheetInPlace(container: HTMLElement, speed: number): void {
 }
 
 function renderSpeedSheet(container: HTMLElement): void {
-  if (mountedSheet === "speed" && container.querySelector("#m-speed-slider")) {
+  const uiLang = getActiveUiLanguage();
+  if (mountedSheet === "speed" && mountedSheetLang === uiLang && container.querySelector("#m-speed-slider")) {
     syncSpeedSheetInPlace(container, state.settings.speed);
     return;
   }
 
   mountedSheet = "speed";
+  mountedSheetLang = uiLang;
   const presets = [0.75, 1.0, 1.25, 1.38, 1.5, 2.0];
   container.innerHTML = `
     <div class="modal-backdrop" id="m-sheet-backdrop">
-      <div class="modal-card mobile-sheet" role="dialog" aria-label="Reading Speed">
+      <div class="modal-card mobile-sheet" role="dialog" aria-label="${escapeAttr(tr("popover_reading_speed"))}">
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="modal-header">
-          <span class="modal-title">Reading Speed</span>
+          <span class="modal-title">${escapeHtml(tr("popover_reading_speed"))}</span>
           <div style="display:flex;align-items:center;gap:10px;">
             <strong id="m-speed-val">${state.settings.speed.toFixed(2)}x</strong>
-            <button class="icon-btn" id="m-sheet-close" aria-label="Close">${Icons.close()}</button>
+            <button class="icon-btn" id="m-sheet-close" aria-label="${escapeAttr(tr("common_close"))}">${Icons.close()}</button>
           </div>
         </div>
         <div class="modal-body">
@@ -1407,28 +1425,30 @@ function renderSpeedSheet(container: HTMLElement): void {
 }
 
 function renderSleepSheet(container: HTMLElement): void {
-  if (mountedSheet === "sleep" && container.querySelector("#m-sheet-backdrop")) {
+  const uiLang = getActiveUiLanguage();
+  if (mountedSheet === "sleep" && mountedSheetLang === uiLang && container.querySelector("#m-sheet-backdrop")) {
     const offBtn = container.querySelector<HTMLButtonElement>("[data-msleep-off]");
     if (offBtn) offBtn.style.display = state.sleepTimer.active ? "" : "none";
     return;
   }
 
   mountedSheet = "sleep";
+  mountedSheetLang = uiLang;
   container.innerHTML = `
     <div class="modal-backdrop" id="m-sheet-backdrop">
-      <div class="modal-card mobile-sheet" role="dialog" aria-label="Sleep Timer">
+      <div class="modal-card mobile-sheet" role="dialog" aria-label="${escapeAttr(tr("popover_sleep_timer"))}">
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="modal-header">
-          <span class="modal-title">Sleep Timer</span>
+          <span class="modal-title">${escapeHtml(tr("popover_sleep_timer"))}</span>
           <button class="icon-btn" id="m-sheet-close">${Icons.close()}</button>
         </div>
         <div class="modal-body">
           <div class="chip-row" style="margin-top:0;">
-            <button class="chip" data-msleep-min="15">15 min</button>
-            <button class="chip" data-msleep-min="30">30 min</button>
-            <button class="chip" data-msleep-min="60">60 min</button>
-            <button class="chip" data-msleep-chap="1">End of Chapter</button>
-            <button class="chip" data-msleep-off="1" style="${state.sleepTimer.active ? "" : "display:none"}">Turn Off</button>
+            <button class="chip" data-msleep-min="15">${escapeHtml(tr("sleep_minutes", { min: 15 }))}</button>
+            <button class="chip" data-msleep-min="30">${escapeHtml(tr("sleep_minutes", { min: 30 }))}</button>
+            <button class="chip" data-msleep-min="60">${escapeHtml(tr("sleep_minutes", { min: 60 }))}</button>
+            <button class="chip" data-msleep-chap="1">${escapeHtml(tr("sleep_end_of_chapter"))}</button>
+            <button class="chip" data-msleep-off="1" style="${state.sleepTimer.active ? "" : "display:none"}">${escapeHtml(tr("sleep_turn_off"))}</button>
           </div>
         </div>
       </div>
@@ -1460,7 +1480,7 @@ function renderSleepSheet(container: HTMLElement): void {
         });
         close();
       } catch (err) {
-        handlersRef?.onToast?.(`Sleep timer failed: ${String(err)}`);
+        handlersRef?.onToast?.(tr("mobile_sleep_failed", { error: String(err) }));
       }
     });
   });
@@ -1477,7 +1497,7 @@ function renderSleepSheet(container: HTMLElement): void {
       });
       close();
     } catch (err) {
-      handlersRef?.onToast?.(`Sleep timer failed: ${String(err)}`);
+      handlersRef?.onToast?.(tr("mobile_sleep_failed", { error: String(err) }));
     }
   });
 
@@ -1490,7 +1510,7 @@ function renderSleepSheet(container: HTMLElement): void {
       });
       close();
     } catch (err) {
-      handlersRef?.onToast?.(`Sleep timer failed: ${String(err)}`);
+      handlersRef?.onToast?.(tr("mobile_sleep_failed", { error: String(err) }));
     }
   });
 }

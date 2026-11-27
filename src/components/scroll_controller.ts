@@ -1,5 +1,7 @@
+import { tr } from "../i18n";
 import { Icons } from "../icons";
 import { notify, state } from "../state";
+import { escapeHtml } from "./sidebar";
 
 /**
  * Coordinates smooth auto-scroll keeping the active sentence near the top
@@ -80,7 +82,7 @@ export class ScrollController {
       { passive: true },
     );
 
-    this.backBtn.innerHTML = `${Icons.arrowUp()}<span>Back to reading</span>`;
+    this.syncLabels();
     this.backBtn.addEventListener("click", () => {
       state.autoScrollEnabled = true;
       this.lastScrolledSid = null;
@@ -88,6 +90,10 @@ export class ScrollController {
       this.syncBackButton();
       notify();
     });
+  }
+
+  public syncLabels(): void {
+    this.backBtn.innerHTML = `${Icons.arrowUp()}<span>${escapeHtml(tr("scroll_back_to_reading"))}</span>`;
   }
 
   public syncBackButton(): void {

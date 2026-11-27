@@ -30,6 +30,7 @@ import {
   closeToolbarPopovers,
   hasOpenToolbarPopover,
   initToolbar,
+  rerenderToolbar,
   syncToolbar,
 } from "./components/toolbar";
 import {
@@ -38,8 +39,10 @@ import {
   syncVoiceCloneDownloadProgress,
 } from "./components/voice_clone_modal";
 import { renderVoicePickerModal } from "./components/voice_picker";
+import { getLanguageMeta, setActiveUiLanguage, tr } from "./i18n";
 import { Icons } from "./icons";
 import {
+  applySettingsSideEffects,
   isAndroidPlatform,
   isPreviewAndroidMode,
   isVoiceCloningEnabled,
@@ -109,8 +112,8 @@ function syncLoadingBanner(): void {
     msg = busyLoadingMessage;
   } else if (state.tts.status === "loading") {
     msg = state.settings.voice_id.startsWith("clone_")
-      ? "Warming up Qwen3-TTS voice model, please wait..."
-      : "Warming up voice model and preparing audio, please wait...";
+      ? tr("loading_warming_qwen")
+      : tr("loading_warming_voice");
   }
   if (msg === lastBannerMessage) return;
   lastBannerMessage = msg;
@@ -304,7 +307,7 @@ function syncActiveHighlight(): void {
 }
 
 async function openBookById(bookId: string): Promise<void> {
-  setBusyLoading("Loading book and restoring your last reading position, please wait...");
+  setBusyLoading(tr("loading_book_restore"));
   try {
     state.searchOpen = false;
     state.searchQuery = "";
@@ -341,7 +344,7 @@ async function openBookById(bookId: string): Promise<void> {
       scrollCtrl.onActiveSentenceChanged(payload.book.current_sentence_idx, true, true);
     }
   } catch (err) {
-    showToast(`Failed opening book: ${String(err)}`);
+    showToast(tr("toast_open_book_failed", { error: String(err) }));
   } finally {
     setBusyLoading(null);
   }
@@ -351,16 +354,18 @@ function renderEmptyWelcome(): void {
   if (state.activeBook) return;
   pdfViewer.clear();
   richViewer.clear();
+  const activeMeta = getLanguageMeta(state.settings.tts_language ?? "en");
+  const modelLabel = `${activeMeta.modelName} (${activeMeta.nativeName})`;
   viewerHostEl.innerHTML = `
     <div class="empty-state" style="margin-top:14vh;">
       <div style="opacity:0.75;">${Icons.brandLogo(48)}</div>
-      <h2 style="margin:0;font-size:20px;color:var(--text-primary);">BookReader</h2>
+      <h2 style="margin:0;font-size:20px;color:var(--text-primary);">${escapeHtml(tr("app_title"))}</h2>
       <p style="margin:0;font-size:13.5px;line-height:1.55;">
-        Open a <strong>PDF</strong>, <strong>EPUB</strong>, <strong>Word (.docx)</strong>, or <strong>TXT</strong> file to read and listen offline with Phonon 31M.
+        ${escapeHtml(tr("empty_welcome_desc", { formats: "PDF / EPUB / DOCX / TXT", model: modelLabel }))}
       </p>
       <div style="display:flex;gap:10px;margin-top:6px;">
-        <button class="btn-primary" id="btn-empty-import">${Icons.plus()}<span>Import Book</span></button>
-        <button class="btn-secondary" id="btn-empty-library">${Icons.library()}<span>Open Library</span></button>
+        <button class="btn-primary" id="btn-empty-import">${Icons.plus()}<span>${escapeHtml(tr("empty_import_book"))}</span></button>
+        <button class="btn-secondary" id="btn-empty-library">${Icons.library()}<span>${escapeHtml(tr("empty_open_library"))}</span></button>
       </div>
     </div>
   `;
@@ -372,7 +377,7 @@ function renderEmptyWelcome(): void {
       state.library = [book, ...state.library.filter((b) => b.id !== book.id)];
       await openBookById(book.id);
     } catch (err) {
-      showToast(`Import failed: ${String(err)}`);
+      showToast(tr("toast_import_failed", { error: String(err) }));
     } finally {
       setBusyLoading(null);
     }
@@ -419,6 +424,20 @@ function renderChrome(): void {
   }
 }
 
+function rerenderAllChrome(): void {
+  document.title = tr("app_title");
+  rerenderToolbar();
+  scrollCtrl.syncLabels();
+  lastBannerMessage = null;
+  renderChrome();
+  if (state.searchOpen) {
+    renderSearch();
+  }
+  if (state.activeModal !== null) {
+    renderModal();
+  }
+}
+
 let shownPdfReflowHint = false;
 
 function applyPageZoom(nextRaw: number): void {
@@ -436,7 +455,7 @@ function applyPageZoom(nextRaw: number): void {
       !shownPdfReflowHint
     ) {
       shownPdfReflowHint = true;
-      showToast("Tip: Open Aa → Reflow Text to auto-wrap zoomed PDFs");
+      showToast(tr("toast_pdf_reflow_hint"));
     }
   } else {
     if (Math.abs(next - t.reader_zoom) < 0.001) return;
@@ -489,7 +508,7 @@ function getPlaybackActions() {
         state.tts.status !== "playing" && state.tts.status !== "loading";
       void (async () => {
         const res = await runTtsAction(
-          willStart ? "Waking audio engine and preparing speech..." : null,
+          willStart ? tr("loading_waking_audio") : null,
           async () => {
             try {
               return await invoke<TtsStateEvent>("tts_toggle_play_pause");
@@ -543,7 +562,7 @@ function getPlaybackActions() {
       if (next && state.settings.pdf_reflow) {
         void persistSettings({ pdf_reflow: false });
         pdfViewer.setReflowMode(false);
-        showToast("Switched to Original Page to adjust PDF margins");
+        showToast(tr("toast_switched_original_margins"));
       }
       pdfViewer.refreshMarginOverlayUI();
       renderChrome();
@@ -553,7 +572,7 @@ function getPlaybackActions() {
         if (!state.activeBook) return;
         const idx = state.tts.sentence_idx;
         const sent = state.sentences[idx];
-        const label = sent ? sent.text.slice(0, 44) : `Sentence ${idx + 1}`;
+        const label = sent ? sent.text.slice(0, 44) : tr("bookmark_sentence_label", { num: idx + 1 });
         const updated = await invoke<BookMeta>("add_bookmark", {
           bookId: state.activeBook.id,
           label,
@@ -562,7 +581,7 @@ function getPlaybackActions() {
         });
         state.activeBook = updated;
         state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
-        showToast("Bookmark added");
+        showToast(tr("toast_bookmark_added"));
       })();
     },
   };
@@ -626,14 +645,22 @@ function renderModal(): void {
       return;
     case "setup":
       renderSetupModal(modalHostEl, {
+        onLanguageChanged: () => {
+          rerenderToolbar();
+          scrollCtrl.syncLabels();
+          renderChrome();
+        },
         onReady: async () => {
           const boot = await invoke<AppBootstrap>("get_bootstrap");
           state.bootstrap = boot;
+          state.settings = boot.settings;
+          applySettingsSideEffects(boot.settings);
           state.voices = boot.voices;
           state.activeModal = null;
           renderModal();
-          renderChrome();
-          showToast("Phonon 31M ready!");
+          rerenderAllChrome();
+          const activeMeta = getLanguageMeta(boot.settings.tts_language ?? "en");
+          showToast(tr("toast_model_ready", { model: `${activeMeta.modelName} · ${activeMeta.nativeName}` }));
         },
       });
       return;
@@ -667,6 +694,7 @@ function renderModal(): void {
         onChanged: renderChrome,
         onToast: showToast,
         onOpenVoiceClone: () => openModal("voice_clone"),
+        onOpenSettings: () => openModal("settings"),
       });
       return;
     case "toc":
@@ -698,6 +726,9 @@ function renderModal(): void {
           richViewer.applyTypography();
           pdfViewer.applyReflowTypography();
         },
+        onLanguageChanged: rerenderAllChrome,
+        onTtsModelsUpdated: renderChrome,
+        onToast: showToast,
       });
       return;
   }
@@ -712,11 +743,13 @@ async function initApp(): Promise<void> {
     attachPreviewMessageHandler();
   }
 
-  setBusyLoading("Warming up voice model and loading library, please wait...");
+  setActiveUiLanguage(null);
+  document.title = tr("app_title");
+  setBusyLoading(tr("loading_startup_voice_library"));
   viewerHostEl.innerHTML = `
     <div class="pdf-loading-card">
       <span class="loading-spinner" aria-hidden="true"></span>
-      <span>Warming up voice model and loading your last book, please wait...</span>
+      <span>${escapeHtml(tr("loading_startup_voice_book"))}</span>
     </div>
   `;
 
@@ -733,14 +766,14 @@ async function initApp(): Promise<void> {
   }
   if (!boot) {
     setBusyLoading(null);
-    const errMsg = String(lastBootErr ?? "Unknown startup error");
-    showToast(`Startup failed: ${errMsg}`);
+    const errMsg = String(lastBootErr ?? tr("boot_unknown_error"));
+    showToast(tr("toast_startup_failed", { error: errMsg }));
     viewerHostEl.innerHTML = `
       <div class="empty-welcome">
-        <h2>Could not start BookReader</h2>
+        <h2>${escapeHtml(tr("boot_error_title"))}</h2>
         <p>${escapeHtml(errMsg)}</p>
         <div style="display:flex;gap:10px;">
-          <button class="btn-primary" id="btn-boot-retry">Retry</button>
+          <button class="btn-primary" id="btn-boot-retry">${escapeHtml(tr("common_retry"))}</button>
         </div>
       </div>
     `;
@@ -757,7 +790,8 @@ async function initApp(): Promise<void> {
   state.ignoreRules = boot.ignore_rules;
   state.voices = boot.voices;
 
-  document.documentElement.setAttribute("data-theme", boot.settings.theme);
+  applySettingsSideEffects(boot.settings);
+  document.title = tr("app_title");
   document.documentElement.setAttribute(
     "data-platform",
     isPreviewAndroidMode() ? "android" : boot.platform,
@@ -796,8 +830,13 @@ async function initApp(): Promise<void> {
   });
 
   await listen<DownloadProgressEvent>("download:progress", (ev) => {
+    if (ev.payload.kind !== "model" && ev.payload.kind !== "qwen_model") {
+      return;
+    }
     state.downloadProgress = ev.payload;
-    if (state.activeModal === "setup") {
+    if (state.activeModal === "setup" && ev.payload.kind === "model") {
+      renderModal();
+    } else if (state.activeModal === "settings" && ev.payload.kind === "model") {
       renderModal();
     } else if (state.activeModal === "voice_clone" && ev.payload.kind === "qwen_model") {
       syncVoiceCloneDownloadProgress(modalHostEl);
@@ -811,9 +850,9 @@ async function initApp(): Promise<void> {
       renderModal();
     }
     if (ev.payload.status === "completed") {
-      showToast(`Export complete: ${ev.payload.output_path}`);
+      showToast(tr("toast_export_complete", { path: ev.payload.output_path }));
     } else if (ev.payload.status === "error" && ev.payload.error) {
-      showToast(`Export error: ${ev.payload.error}`);
+      showToast(tr("toast_export_error", { error: ev.payload.error }));
     }
   });
 
@@ -991,7 +1030,7 @@ window.addEventListener("keydown", (e) => {
       state.tts.status !== "playing" && state.tts.status !== "loading";
     void (async () => {
       const res = await runTtsAction(
-        willStart ? "Waking audio engine and preparing speech..." : null,
+        willStart ? tr("loading_waking_audio") : null,
         async () => {
           try {
             return await invoke<TtsStateEvent>("tts_toggle_play_pause");

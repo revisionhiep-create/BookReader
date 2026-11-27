@@ -1,3 +1,4 @@
+import { getLanguageMeta, tr } from "../i18n";
 import { invoke, openDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { state } from "../state";
@@ -63,8 +64,8 @@ function computeQwenProgress(): {
   if (!dp || dp.kind !== "qwen_model") {
     return {
       pct: "0.0",
-      fileLabel: "Connecting to Hugging Face...",
-      filesLabel: "File 1 / 8",
+      fileLabel: tr("clone_dl_connecting"),
+      filesLabel: tr("setup_file_progress", { current: 1, total: 8 }),
       bytesLabel: "",
     };
   }
@@ -81,8 +82,11 @@ function computeQwenProgress(): {
         : "";
   return {
     pct: maxQwenPct.toFixed(1),
-    fileLabel: dp.done ? "Loading model into GPU/CPU memory..." : dp.current_file || "Downloading...",
-    filesLabel: `File ${Math.min(dp.done ? totalFiles : doneFiles + 1, totalFiles)} / ${totalFiles}`,
+    fileLabel: dp.done ? tr("clone_dl_loading_mem") : dp.current_file || tr("clone_dl_downloading"),
+    filesLabel: tr("setup_file_progress", {
+      current: Math.min(dp.done ? totalFiles : doneFiles + 1, totalFiles),
+      total: totalFiles,
+    }),
     bytesLabel,
   };
 }
@@ -112,8 +116,8 @@ function syncTrimUi(container: HTMLElement, modelReady: boolean): void {
   const { spanSec, spanValid } = computeTrimValid();
   const spanEl = container.querySelector<HTMLElement>("#lbl-clone-span");
   if (spanEl) {
-    const warn = spanSec < 3 || spanSec > 30 ? " — must be 3–30s" : "";
-    spanEl.innerHTML = `selected <strong>${spanSec.toFixed(1)}s</strong>${warn}`;
+    const warn = spanSec < 3 || spanSec > 30 ? tr("clone_span_rule") : "";
+    spanEl.innerHTML = `${escapeHtml(tr("clone_selected_span", { sec: spanSec.toFixed(1) }))}${escapeHtml(warn)}`;
   }
   const previewBtn = container.querySelector<HTMLButtonElement>("#btn-preview-slice");
   if (previewBtn) {
@@ -156,7 +160,7 @@ export function syncVoiceCloneDownloadProgress(container: HTMLElement): void {
 
   const prog = computeQwenProgress();
   if (fillEl) fillEl.style.width = `${prog.pct}%`;
-  if (fileEl) fileEl.textContent = prog.fileLabel;
+  if (fileEl) fileEl.textContent = tr("setup_downloading_file", { file: prog.fileLabel });
   if (filesEl) filesEl.textContent = prog.filesLabel;
   if (bytesEl) bytesEl.textContent = prog.bytesLabel;
 }
@@ -180,7 +184,7 @@ export function renderVoiceCloneModal(
         }
       })
       .catch((err) => {
-        cloneError = `Could not inspect Qwen3-TTS model status: ${String(err)}`;
+        cloneError = tr("clone_err_inspect", { error: String(err) });
         if (state.activeModal === "voice_clone") {
           renderVoiceCloneModal(container, handlers);
         }
@@ -198,7 +202,7 @@ export function renderVoiceCloneModal(
     qwenStatus?.model_ready ??
     (state.bootstrap?.qwen_model_variant === activeVariant ? state.bootstrap.qwen_model_ready : false);
   const deviceLabel =
-    qwenStatus?.device_label ?? state.bootstrap?.qwen_device_label ?? "Auto (GPU / CPU)";
+    qwenStatus?.device_label ?? state.bootstrap?.qwen_device_label ?? tr("clone_device_auto");
   const sizeGb = (
     (activeInfo?.estimated_size_mb ??
       qwenStatus?.estimated_size_mb ??
@@ -238,8 +242,8 @@ export function renderVoiceCloneModal(
         : undefined);
     const pill =
       ready === undefined
-        ? `<span class="status-pill missing">Checking</span>`
-        : `<span class="status-pill ${ready ? "ready" : "missing"}">${ready ? "Ready" : "Missing"}</span>`;
+        ? `<span class="status-pill missing">${escapeHtml(tr("common_checking"))}</span>`
+        : `<span class="status-pill ${ready ? "ready" : "missing"}">${escapeHtml(ready ? tr("common_ready") : tr("common_missing"))}</span>`;
     return `
       <button
         type="button"
@@ -258,11 +262,11 @@ export function renderVoiceCloneModal(
 
   container.innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal-card wide" role="dialog" aria-label="Voice Cloning">
+      <div class="modal-card wide" role="dialog" aria-label="${escapeAttr(tr("clone_aria_label"))}">
         <div class="modal-header">
           <div style="display:flex;align-items:center;gap:8px;">
             ${Icons.voiceClone()}
-            <span class="modal-title">Voice Cloning (Qwen3-TTS)</span>
+            <span class="modal-title">${escapeHtml(tr("clone_title"))}</span>
           </div>
           <button class="icon-btn" id="btn-modal-close">${Icons.close()}</button>
         </div>
@@ -270,36 +274,40 @@ export function renderVoiceCloneModal(
         <div class="modal-body">
           <div class="setting-group">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-              <strong style="font-size:12.5px;">Model Size</strong>
+              <strong style="font-size:12.5px;">${escapeHtml(tr("clone_model_size"))}</strong>
               <span style="font-size:11.5px;color:var(--text-muted);">
-                ${switchingVariant ? "Switching model..." : "Saved cloned voices automatically work with both 0.6B and 1.7B."}
+                ${escapeHtml(switchingVariant ? tr("clone_switching_model") : tr("clone_model_compat_hint"))}
               </span>
             </div>
 
             <div class="clone-model-toggle">
-              ${renderVariantOption("0.6b", "0.6B · Fast", "~2.5 GB · Faster & lighter")}
-              ${renderVariantOption("1.7b", "1.7B · Best Quality", "~4.5 GB · Max nuance")}
+              ${renderVariantOption("0.6b", tr("clone_opt_fast_title"), tr("clone_opt_fast_sub"))}
+              ${renderVariantOption("1.7b", tr("clone_opt_best_title"), tr("clone_opt_best_sub"))}
             </div>
 
             <div class="clone-status-banner">
               <div style="display:flex;flex-direction:column;gap:3px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                  <strong>${modelReady ? `${activeTitle} Detected` : `${activeTitle} Required (~${sizeGb} GB)`}</strong>
-                  <span class="status-pill ${modelReady ? "ready" : "missing"}">${modelReady ? "Ready" : "Missing"}</span>
+                  <strong>${escapeHtml(
+                    modelReady
+                      ? tr("clone_detected", { title: activeTitle })
+                      : tr("clone_required", { title: activeTitle, size: sizeGb }),
+                  )}</strong>
+                  <span class="status-pill ${modelReady ? "ready" : "missing"}">${escapeHtml(modelReady ? tr("common_ready") : tr("common_missing"))}</span>
                   <span class="flag-tag">${escapeHtml(deviceLabel)}</span>
                 </div>
                 <span style="font-size:12px;color:var(--text-secondary);">
                   ${
                     modelReady
-                      ? `Stored in ${escapeHtml(activeInfo?.model_dir || qwenStatus?.model_dir || activeDirFallback)}`
-                      : `${activeTitle} + 12Hz tokenizer not found on disk. Click Download Model to install this size.`
+                      ? escapeHtml(tr("clone_stored_in", { path: activeInfo?.model_dir || qwenStatus?.model_dir || activeDirFallback }))
+                      : escapeHtml(tr("clone_not_found", { title: activeTitle }))
                   }
                 </span>
               </div>
               ${
                 !modelReady
                   ? `<button class="btn-primary" id="btn-download-qwen" ${busyLock ? "disabled" : ""}>
-                       ${downloadingQwen ? "Downloading..." : "Download Model"}
+                       ${escapeHtml(downloadingQwen ? tr("common_downloading") : tr("clone_download_model"))}
                      </button>`
                   : ""
               }
@@ -310,7 +318,7 @@ export function renderVoiceCloneModal(
                 ? `
               <div style="display:flex;flex-direction:column;gap:6px;">
                 <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);">
-                  <span>Downloading: <strong id="qwen-dl-file" style="color:var(--text-primary);">${escapeHtml(prog.fileLabel)}</strong></span>
+                  <span id="qwen-dl-file">${escapeHtml(tr("setup_downloading_file", { file: prog.fileLabel }))}</span>
                   <span style="display:flex;gap:10px;font-variant-numeric:tabular-nums;">
                     <span id="qwen-dl-bytes">${escapeHtml(prog.bytesLabel)}</span>
                     <span id="qwen-dl-files">${escapeHtml(prog.filesLabel)}</span>
@@ -327,16 +335,16 @@ export function renderVoiceCloneModal(
 
           <div class="setting-group" style="${modelReady ? "" : "opacity:0.55;"}">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-              <strong>Create Cloned Voice</strong>
+              <strong>${escapeHtml(tr("clone_create_title"))}</strong>
               <span style="font-size:12px;color:var(--text-secondary);">
-                Recommended: <strong>5–15 seconds</strong> of clear speech (3s min, 30s max)
+                ${escapeHtml(tr("clone_recommended_len"))}
               </span>
             </div>
 
             <div class="clone-drop-row">
               <div style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1;">
                 <strong style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                  ${probeResult ? escapeHtml(probeResult.filename) : "Select a reference audio clip (WAV, MP3, M4A, FLAC, OGG)"}
+                  ${probeResult ? escapeHtml(probeResult.filename) : escapeHtml(tr("clone_select_audio"))}
                 </strong>
                 <span style="font-size:12px;color:${
                   probeResult?.status === "too_short" ? "var(--danger)" : "var(--text-secondary)"
@@ -344,12 +352,12 @@ export function renderVoiceCloneModal(
                   ${
                     probeResult
                       ? `${escapeHtml(probeResult.message)} (${probeResult.sample_rate} Hz)`
-                      : "Best results come from 5–15s of a single clean speaker without music or echo."
+                      : escapeHtml(tr("clone_best_results"))
                   }
                 </span>
               </div>
               <button class="btn-secondary" id="btn-pick-clone-audio" ${!modelReady || busyLock ? "disabled" : ""}>
-                Choose Audio...
+                ${escapeHtml(tr("clone_choose_audio"))}
               </button>
             </div>
 
@@ -357,14 +365,14 @@ export function renderVoiceCloneModal(
               probeResult
                 ? `
               <div class="setting-row" style="flex-wrap:wrap;">
-                <span>Clip Window (<span id="lbl-clone-span">selected <strong>${spanSec.toFixed(1)}s</strong>${spanSec < 3 || spanSec > 30 ? " — must be 3–30s" : ""}</span>)</span>
+                <span>${escapeHtml(tr("clone_clip_window"))} (<span id="lbl-clone-span">${escapeHtml(tr("clone_selected_span", { sec: spanSec.toFixed(1) }))}${escapeHtml(spanSec < 3 || spanSec > 30 ? tr("clone_span_rule") : "")}</span>)</span>
                 <div style="display:flex;align-items:center;gap:8px;">
-                  <label style="font-size:12px;color:var(--text-secondary);">Start</label>
+                  <label style="font-size:12px;color:var(--text-secondary);">${escapeHtml(tr("clone_trim_start"))}</label>
                   <input type="number" id="clone-trim-start" min="0" max="${probeResult.duration_sec.toFixed(1)}" step="0.5" value="${draftStartSec.toFixed(1)}" style="width:76px;padding:5px;" ${!modelReady || busyLock ? "disabled" : ""}/>
-                  <label style="font-size:12px;color:var(--text-secondary);">End</label>
+                  <label style="font-size:12px;color:var(--text-secondary);">${escapeHtml(tr("clone_trim_end"))}</label>
                   <input type="number" id="clone-trim-end" min="0" max="${probeResult.duration_sec.toFixed(1)}" step="0.5" value="${draftEndSec.toFixed(1)}" style="width:76px;padding:5px;" ${!modelReady || busyLock ? "disabled" : ""}/>
-                  <button class="btn-secondary" id="btn-preview-slice" style="padding:5px 10px;font-size:12px;display:inline-flex;align-items:center;gap:5px;" ${!modelReady || !spanValid || previewingSlice || busyLock ? "disabled" : ""} title="Listen to the exact trimmed audio slice">
-                    ${Icons.play(11)}<span>${previewingSlice ? "Loading..." : "Play Slice"}</span>
+                  <button class="btn-secondary" id="btn-preview-slice" style="padding:5px 10px;font-size:12px;display:inline-flex;align-items:center;gap:5px;" ${!modelReady || !spanValid || previewingSlice || busyLock ? "disabled" : ""} title="${escapeAttr(tr("clone_play_slice_tooltip"))}">
+                    ${Icons.play(11)}<span>${escapeHtml(previewingSlice ? tr("common_loading") : tr("clone_play_slice"))}</span>
                   </button>
                 </div>
               </div>
@@ -373,20 +381,20 @@ export function renderVoiceCloneModal(
             }
 
             <div class="setting-row">
-              <span>Voice Name</span>
-              <input type="text" id="clone-voice-name" maxlength="48" placeholder="e.g. Morgan Narrator" value="${escapeAttr(draftName)}" style="width:270px;padding:7px 10px;" ${!modelReady || busyLock ? "disabled" : ""}/>
+              <span>${escapeHtml(tr("clone_voice_name"))}</span>
+              <input type="text" id="clone-voice-name" maxlength="48" placeholder="${escapeAttr(tr("clone_voice_name_placeholder"))}" value="${escapeAttr(draftName)}" style="width:270px;padding:7px 10px;" ${!modelReady || busyLock ? "disabled" : ""}/>
             </div>
 
             <div style="display:flex;flex-direction:column;gap:6px;">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-                <span style="font-size:13px;">Reference Transcript <span style="color:var(--text-muted);">(Optional)</span></span>
+                <span style="font-size:13px;">${escapeHtml(tr("clone_ref_transcript"))} <span style="color:var(--text-muted);">${escapeHtml(tr("clone_optional"))}</span></span>
                 <span class="flag-tag" id="lbl-clone-mode">
-                  ${iclMode ? "ICL Mode · Highest Fidelity" : "X-Vector Mode · Instant"}
+                  ${escapeHtml(iclMode ? tr("clone_mode_icl") : tr("clone_mode_xvec"))}
                 </span>
               </div>
-              <textarea id="clone-ref-text" class="clone-textarea" rows="2" placeholder="Paste the exact words spoken inside the selected Start–End clip for highest similarity, or leave blank for fast X-Vector cloning..." ${!modelReady || busyLock ? "disabled" : ""}>${escapeHtml(draftRefText)}</textarea>
+              <textarea id="clone-ref-text" class="clone-textarea" rows="2" placeholder="${escapeAttr(tr("clone_ref_placeholder"))}" ${!modelReady || busyLock ? "disabled" : ""}>${escapeHtml(draftRefText)}</textarea>
               <div id="clone-trim-warn" class="clone-warn-text" style="display:${isClipTrimmed() && iclMode ? "block" : "none"};">
-                Clip is trimmed — make sure Reference Transcript matches <strong>only</strong> the exact words spoken between Start and End (any extra words at the end will be spoken before every sentence), or leave it blank for X-Vector mode.
+                ${escapeHtml(tr("clone_trim_warn"))}
               </div>
             </div>
 
@@ -394,19 +402,19 @@ export function renderVoiceCloneModal(
 
             <div style="display:flex;justify-content:flex-end;">
               <button class="btn-primary" id="btn-create-clone" ${canSubmit ? "" : "disabled"}>
-                ${cloningBusy ? "Cloning Voice..." : "Clone &amp; Add Voice"}
+                ${escapeHtml(cloningBusy ? tr("clone_creating") : tr("clone_create_btn"))}
               </button>
             </div>
           </div>
 
           <div class="setting-group">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-              <strong>Cloned Voices (${clonedVoices.length})</strong>
-              <span style="font-size:11.5px;color:var(--text-muted);">Also selectable under Voices &rarr; Cloned</span>
+              <strong>${escapeHtml(tr("clone_list_title", { count: clonedVoices.length }))}</strong>
+              <span style="font-size:11.5px;color:var(--text-muted);">${escapeHtml(tr("clone_list_hint"))}</span>
             </div>
             ${
               clonedVoices.length === 0
-                ? `<div style="font-size:12.5px;color:var(--text-muted);">No cloned voices yet. Upload a 5–15 second sample above to create one.</div>`
+                ? `<div style="font-size:12.5px;color:var(--text-muted);">${escapeHtml(tr("clone_list_empty"))}</div>`
                 : `
               <div style="display:flex;flex-direction:column;gap:6px;">
                 ${clonedVoices.map((v) => renderClonedRow(v, busyLock)).join("")}
@@ -446,13 +454,15 @@ export function renderVoiceCloneModal(
         handlers.onChanged();
         handlers.onToast(
           res.status.model_ready
-            ? `Switched Voice Cloning to ${nextVariant === "0.6b" ? "Qwen3-TTS 0.6B (Fast)" : "Qwen3-TTS 1.7B (Best Quality)"}`
-            : `Selected Qwen3-TTS ${nextVariant.toUpperCase()} — download required before cloning or speaking.`,
+            ? tr("clone_toast_switched_ready", {
+                variant: `Qwen3-TTS ${tr(nextVariant === "0.6b" ? "clone_opt_fast_title" : "clone_opt_best_title")}`,
+              })
+            : tr("clone_toast_switched_need_dl", { variant: nextVariant.toUpperCase() }),
         );
         rerenderIfOpen(container, handlers);
       } catch (err) {
         switchingVariant = false;
-        cloneError = `Failed switching model size: ${String(err)}`;
+        cloneError = tr("clone_err_switch", { error: String(err) });
         rerenderIfOpen(container, handlers);
       }
     });
@@ -479,12 +489,14 @@ export function renderVoiceCloneModal(
         state.bootstrap.qwen_device_label = qwenStatus.device_label;
       }
       handlers.onToast(
-        `${targetVariant === "0.6b" ? "Qwen3-TTS 0.6B" : "Qwen3-TTS 1.7B"} downloaded and ready!`,
+        tr("clone_toast_dl_ready", {
+          variant: `Qwen3-TTS ${tr(targetVariant === "0.6b" ? "clone_opt_fast_title" : "clone_opt_best_title")}`,
+        }),
       );
       rerenderIfOpen(container, handlers);
     } catch (err) {
       downloadingQwen = false;
-      cloneError = `Model download failed: ${String(err)}`;
+      cloneError = tr("clone_err_dl", { error: String(err) });
       rerenderIfOpen(container, handlers);
     }
   });
@@ -495,7 +507,7 @@ export function renderVoiceCloneModal(
         multiple: false,
         filters: [
           {
-            name: "Audio Clips",
+            name: tr("clone_audio_clips_filter"),
             extensions: ["wav", "mp3", "m4a", "flac", "ogg"],
           },
         ],
@@ -565,7 +577,7 @@ export function renderVoiceCloneModal(
       rerenderIfOpen(container, handlers);
     } catch (err) {
       previewingSlice = false;
-      handlers.onToast(`Slice preview failed: ${String(err)}`);
+      handlers.onToast(tr("clone_err_slice", { error: String(err) }));
       rerenderIfOpen(container, handlers);
     }
   });
@@ -581,8 +593,8 @@ export function renderVoiceCloneModal(
     if (lbl) {
       lbl.textContent =
         draftRefText.trim().length > 0
-          ? "ICL Mode · Highest Fidelity"
-          : "X-Vector Mode · Instant";
+          ? tr("clone_mode_icl")
+          : tr("clone_mode_xvec");
     }
     syncTrimWarning(container);
   });
@@ -611,7 +623,7 @@ export function renderVoiceCloneModal(
       draftStartSec = 0;
       draftEndSec = 15;
       handlers.onChanged();
-      handlers.onToast(`Added "${res.created.name}" to Cloned Voices`);
+      handlers.onToast(tr("clone_toast_added", { name: res.created.name }));
       rerenderIfOpen(container, handlers);
     } catch (err) {
       cloningBusy = false;
@@ -628,14 +640,14 @@ export function renderVoiceCloneModal(
         busyVoiceId = vid;
         rerenderIfOpen(container, handlers);
         await invoke("tts_preview_text", {
-          text: "The quick brown fox reads smoothly across every page.",
+          text: getLanguageMeta(state.settings.tts_language ?? "en").samplePreviewText,
           voiceId: vid,
         });
         busyVoiceId = null;
         rerenderIfOpen(container, handlers);
       } catch (err) {
         busyVoiceId = null;
-        handlers.onToast(`Preview failed: ${String(err)}`);
+        handlers.onToast(tr("voices_toast_preview_err", { error: String(err) }));
         rerenderIfOpen(container, handlers);
       }
     });
@@ -655,7 +667,7 @@ export function renderVoiceCloneModal(
         rerenderIfOpen(container, handlers);
       } catch (err) {
         busyVoiceId = null;
-        handlers.onToast(`Voice error: ${String(err)}`);
+        handlers.onToast(tr("voices_toast_voice_err", { error: String(err) }));
         rerenderIfOpen(container, handlers);
       }
     });
@@ -675,11 +687,11 @@ export function renderVoiceCloneModal(
         state.settings = res.settings;
         busyVoiceId = null;
         handlers.onChanged();
-        handlers.onToast("Cloned voice removed");
+        handlers.onToast(tr("voices_toast_clone_deleted"));
         rerenderIfOpen(container, handlers);
       } catch (err) {
         busyVoiceId = null;
-        handlers.onToast(`Delete error: ${String(err)}`);
+        handlers.onToast(tr("voices_toast_delete_err", { error: String(err) }));
         rerenderIfOpen(container, handlers);
       }
     });
@@ -701,13 +713,13 @@ function renderClonedRow(v: VoiceInfo, modalBusy: boolean): string {
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-        <button class="icon-btn" data-clone-preview="${escapeAttr(v.voice_id)}" title="Preview cloned voice" ${isBusy ? "disabled" : ""}>
+        <button class="icon-btn" data-clone-preview="${escapeAttr(v.voice_id)}" title="${escapeAttr(tr("clone_preview_tooltip"))}" ${isBusy ? "disabled" : ""}>
           ${Icons.play(13)}
         </button>
         <button class="chip ${isActive ? "active" : ""}" data-clone-use="${escapeAttr(v.voice_id)}" ${isBusy ? "disabled" : ""}>
-          ${isActive ? "Active" : "Use"}
+          ${escapeHtml(isActive ? tr("common_active") : tr("common_use"))}
         </button>
-        <button class="icon-btn" data-clone-delete="${escapeAttr(v.voice_id)}" title="Delete cloned voice" ${isBusy ? "disabled" : ""}>
+        <button class="icon-btn" data-clone-delete="${escapeAttr(v.voice_id)}" title="${escapeAttr(tr("clone_delete_tooltip"))}" ${isBusy ? "disabled" : ""}>
           ${Icons.trash()}
         </button>
       </div>

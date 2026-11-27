@@ -5,10 +5,11 @@ pub mod alignment;
 pub mod audio;
 pub mod engine;
 pub mod pauses;
+pub mod pocket_engine;
 pub mod qwen_engine;
 pub mod wsola;
 
-use crate::models::{QwenModelVariant, SentenceItem, TtsStateEvent};
+use crate::models::{AppLanguage, QwenModelVariant, SentenceItem, TtsStateEvent};
 use crate::paths::AppPaths;
 use crate::storage::Storage;
 use crate::text_pipeline::{ProcessedSentence, TextPipeline};
@@ -74,13 +75,24 @@ impl TtsController {
     pub fn start(app: AppHandle, storage: Arc<Storage>) -> Result<Arc<Self>, String> {
         let settings = storage.settings();
         let engine = Arc::new(PhononEngine::new());
-        if storage.paths().model_ready() {
+        let warmup_lang = if storage.paths().language_model_ready(settings.tts_language) {
+            Some(settings.tts_language)
+        } else {
+            storage.paths().first_ready_tts_language()
+        };
+        if let Some(lang) = warmup_lang {
             let warmup_engine = Arc::clone(&engine);
             let warmup_storage = Arc::clone(&storage);
             std::thread::Builder::new()
                 .name("bookreader-model-warmup".to_string())
                 .spawn(move || {
-                    let _ = warmup_engine.ensure_loaded(warmup_storage.paths());
+                    if lang == AppLanguage::En {
+                        let _ = warmup_engine.ensure_loaded(warmup_storage.paths());
+                    } else {
+                        let _ = warmup_engine
+                            .pocket()
+                            .ensure_loaded(warmup_storage.paths(), lang);
+                    }
                 })
                 .ok();
         }
@@ -122,8 +134,9 @@ impl TtsController {
         &self.engine
     }
 
+    #[allow(dead_code)]
     pub fn is_model_loaded(&self) -> bool {
-        self.engine.is_loaded()
+        self.engine.is_loaded() || self.engine.pocket().is_loaded()
     }
 
     pub fn is_actively_playing(&self) -> bool {
@@ -140,8 +153,19 @@ impl TtsController {
         }
     }
 
+    #[allow(dead_code)]
     pub fn ensure_model_loaded(&self) -> Result<(), String> {
         self.engine.ensure_loaded(self.storage.paths())
+    }
+
+    pub fn ensure_language_loaded(&self, lang: AppLanguage) -> Result<(), String> {
+        if lang == AppLanguage::En {
+            self.engine.ensure_loaded(self.storage.paths())
+        } else {
+            self.engine
+                .pocket()
+                .ensure_loaded(self.storage.paths(), lang)
+        }
     }
 
     pub fn ensure_engine_for_voice(&self, voice_id: &str) -> Result<(), String> {
@@ -445,6 +469,7 @@ impl TtsController {
             .flatten();
         let pcm_raw = self.engine.synthesize(
             self.storage.paths(),
+            settings.tts_language,
             settings.qwen_model_variant,
             cloned_meta.as_ref(),
             &spoken,
@@ -570,6 +595,7 @@ impl TtsController {
                         .flatten();
                     match self.engine.synthesize(
                         self.storage.paths(),
+                        settings.tts_language,
                         settings.qwen_model_variant,
                         cloned_meta.as_ref(),
                         &spoken_text,

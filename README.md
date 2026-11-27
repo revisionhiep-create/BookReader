@@ -1,6 +1,6 @@
 # BookReader
 
-A self-contained cross-platform (**Windows**, **macOS**, & **Android**) text-to-speech reader built with **Rust** and **Tauri v2**, powered locally by **Gradium Phonon 31M** (`gradium/phonon-31m-en` via `ptts`) across 37 English voices, with optional local **Qwen3-TTS** voice cloning on desktop.
+A self-contained cross-platform (**Windows**, **macOS**, & **Android**) text-to-speech reader built with **Rust** and **Tauri v2**, featuring full **7-language UI localization** (**English, Français, Deutsch, Español, Português, Italiano, Nederlands**) and local offline neural TTS powered by **Gradium Phonon 31M** (`gradium/phonon-31m-en`, 37 English voices) and **Kyutai Pocket TTS** (`kyutai/pocket-tts-without-voice-cloning`, 27 voices each across French, German, Spanish, Portuguese, Italian, and Dutch), with optional local **Qwen3-TTS** voice cloning on desktop.
 
 No Python runtime, account, or cloud TTS API is required — models and voices download locally into a portable `BookReader_Data/` folder right next to `BookReader.exe` (Windows) or `BookReader.app` (macOS), or privately inside Android app storage.
 
@@ -44,13 +44,13 @@ See [android/README.md](android/README.md) for full Android details, tablet/fold
 1. On your Android phone or tablet (Android 8.0+), download **[BookReader-android-arm64.apk](https://github.com/revisionhiep-create/BookReader/releases/latest/download/BookReader-android-arm64.apk)**.
 2. Open the downloaded `.apk` from your browser downloads or **Files** app. If prompted, allow **"Install unknown apps"** for that browser/file manager (Developer Mode / USB debugging is **not** required — `com.bookreader.android` is signed and registered in Android Developer Console).
 3. Launch **BookReader** and allow **Notifications** when prompted so background/lock-screen playback controls appear.
-4. Tap **Download Phonon 31M (~65 MB)** on first launch, then tap **Import Book** to open a **PDF**, **EPUB**, **DOCX**, or **TXT** file.
-*(Note: Voice Cloning is intentionally excluded on Android to keep mobile size and memory low; all 37 English voices, swipeable bottom sheets, adjustable captions, background narration, and WAV/MP3 export are included.)*
+4. Choose your preferred language (**English** with Phonon 31M ~65 MB, or **French / German / Spanish / Portuguese / Italian / Dutch** with Kyutai Pocket TTS ~209 MB) and tap **Download**, then tap **Import Book** to open a **PDF**, **EPUB**, **DOCX**, or **TXT** file.
+*(Note: Voice Cloning is intentionally excluded on Android to keep mobile size and memory low; all 7 offline TTS languages, full 7-language UI, swipeable bottom sheets, adjustable captions, background narration, and WAV/MP3 export are included.)*
 
 ### First-Time Setup & Reading
-1. **First-Time Voice Engine Setup**: Click **Download Phonon 31M (~65 MB)** to install the 4 core model files into `BookReader_Data/models/`.
+1. **First-Time Voice Engine Setup**: Select your language (auto-detected from your system locale, changeable anytime in **Settings**) and click **Download** to install Phonon 31M (~65 MB for English) or Kyutai Pocket TTS (~209 MB for FR/DE/ES/PT/IT/NL) into `BookReader_Data/models/`.
 2. **Open a Book & Listen**: Click **Import Book** (or open **Library**) and pick a **PDF**, **EPUB**, **DOCX**, or **TXT** file. Click any sentence to jump, or press `Space` to Play/Pause.
-3. **Switch Voices or Clone a Custom Voice**: Choose from 37 built-in English voices, or open **Voice Cloning** (`0.6B-Base` ~2.5 GB or `1.7B-Base` ~4.5 GB) with a 3–30s audio clip (uses NVIDIA CUDA on Windows if available, Apple Metal GPU on Apple Silicon, or CPU fallback).
+3. **Switch Languages, Voices, or Clone a Custom Voice**: Download or switch between any of the 7 TTS languages in **Settings → Language & Voice Models**, browse language-filtered voices in the **Voice Picker** (with native flagship speakers pinned first), or open **Voice Cloning** (`0.6B-Base` ~2.5 GB or `1.7B-Base` ~4.5 GB) with a 3–30s audio clip (uses NVIDIA CUDA on Windows if available, Apple Metal GPU on Apple Silicon, or CPU fallback).
 4. **Controls**: Toggle **Closed Captions (CC)** (`A-`/`21px`/`A+`), zoom with `Ctrl`/`⌘` + `+/-` or `Ctrl`/`⌘` + Wheel, toggle **Dark Page** on PDFs, and drag **Header & Footer Ignore Margins** on PDFs.
 
 ---
@@ -58,7 +58,11 @@ See [android/README.md](android/README.md) for full Android details, tablet/fold
 ## Features
 
 - **Document Support with Inline Images**: Read **PDF**, **EPUB**, **DOCX** (Word), and **TXT** files while keeping embedded document images intact.
-- **37 Local English Voices + Custom Voice Cloning**: Male and female Gradium Phonon 31M English voices downloaded directly inside your portable data directory, plus local **Qwen3-TTS 0.6B-Base** (Fast, ~2.5 GB) / **1.7B-Base** (Best Quality, ~4.5 GB) voice cloning (3–30s reference clips, 5–15s recommended, with optional transcript for high-fidelity ICL mode or instant X-Vector mode) stored under the **Cloned** category.
+- **7 Offline Languages (Phonon 31M + Kyutai Pocket TTS) & Custom Voice Cloning**:
+  - **English (`en`)**: 37 Gradium Phonon 31M voices (US, UK, and Character voices).
+  - **French (`fr`), German (`de`), Spanish (`es`), Portuguese (`pt`), Italian (`it`), & Dutch (`nl`)**: 27 pure-Rust Kyutai Pocket TTS speakers per language with native flagship speakers (**Estelle**, **Jürgen**, **Lola**, **Rafael**, **Giovanni**, **Daan**) pinned first and strict language-only voice filtering.
+  - **Full 7-Language Interface**: Live-switchable UI across English, Français, Deutsch, Español, Português, Italiano, and Nederlands without restarting.
+  - **Custom Voice Cloning (Desktop)**: Local **Qwen3-TTS 0.6B-Base** (Fast, ~2.5 GB) / **1.7B-Base** (Best Quality, ~4.5 GB) voice cloning (3–30s reference clips, 5–15s recommended, with optional transcript for high-fidelity ICL mode or instant X-Vector mode) stored under the **Cloned** category.
 - **Live Highlighting & Closed Captions (CC)**:
   - Highlights the active sentence accurately on the PDF canvas overlay (without cross-page bleed) or rich text view and scrolls smoothly along the top of the viewport.
   - Toggleable **Closed Captions** bar shows smooth 60–120 FPS latency-compensated word-by-word highlighting with adjustable caption font size (`A-` / `21px` / `A+` in the top toolbar and a slider in **Settings**).
@@ -104,10 +108,11 @@ See [android/README.md](android/README.md) for full Android details, tablet/fold
 BookReader automatically initializes two folders:
 
 - **Portable Assets** (`BookReader_Data/` next to `BookReader.exe` or `BookReader.app` in release builds, or in the workspace root during dev):
-  - `BookReader_Data/models/phonon-31m-en/` — downloaded Phonon 31M weights and tokenizer files
+  - `BookReader_Data/models/phonon-31m-en/` — downloaded Phonon 31M English weights and tokenizer files
+  - `BookReader_Data/models/pocket-tts/<language>/` — downloaded Kyutai Pocket TTS weights and tokenizer files (`french`, `german`, `spanish`, `portuguese`, `italian`, `dutch`)
   - `BookReader_Data/models/qwen3-tts-0.6b-base/` — downloaded Qwen3-TTS 0.6B-Base weights and 12Hz speech tokenizer (Fast, ~2.5 GB)
   - `BookReader_Data/models/qwen3-tts-1.7b-base/` — downloaded Qwen3-TTS 1.7B-Base weights and 12Hz speech tokenizer (Best Quality, ~4.5 GB)
-  - `BookReader_Data/voices/` — downloaded voice conditioning audio files and `cloned/` custom voice prompts
+  - `BookReader_Data/voices/` — downloaded Phonon voice files, `pocket/<lang>/` Pocket speaker embeddings, and `cloned/` custom voice prompts
   - `BookReader_Data/books/` — imported copies of your books and cached assets
 - **User Preferences** (`%APPDATA%\Bookreader\` on Windows, `~/Library/Application Support/Bookreader/` on macOS, private app storage on Android):
   - Saved immediately on every setting change: theme, voice, speed, typography, zoom, caption font size, pause durations, dark PDF page state, pronunciation rules, ignore rules, library reading progress/bookmarks, and saved desktop window geometry (`window_state.json`).
@@ -122,7 +127,8 @@ See [windows/README.md](windows/README.md) for Windows build instructions, [maco
 
 ## Attribution & Stack
 
-- **TTS Engine**: [Gradium Phonon 31M (`gradium/phonon-31m-en`)](https://huggingface.co/gradium/phonon-31m-en) via [`ptts`](https://crates.io/crates/ptts)
+- **English TTS Engine**: [Gradium Phonon 31M (`gradium/phonon-31m-en`)](https://huggingface.co/gradium/phonon-31m-en) via [`ptts`](https://crates.io/crates/ptts)
+- **Multilingual TTS Engine**: [Kyutai Pocket TTS (`kyutai/pocket-tts-without-voice-cloning`)](https://huggingface.co/kyutai/pocket-tts-without-voice-cloning) (FR/DE/ES/PT/IT/NL) via [`ptts`](https://crates.io/crates/ptts) & [`xn`](https://crates.io/crates/xn)
 - **Voice Cloning Engine**: [Qwen3-TTS](https://huggingface.co/Qwen) (`0.6B-Base` / `1.7B-Base`) via [`qwen_tts`](https://crates.io/crates/qwen_tts) & [`candle-core`](https://crates.io/crates/candle-core)
 - **Desktop Framework**: [Tauri v2](https://v2.tauri.app/) (Rust + Edge WebView2)
 - **PDF Rendering**: [PDF.js (`pdfjs-dist`)](https://mozilla.github.io/pdf.js/)

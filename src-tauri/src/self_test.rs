@@ -6,8 +6,8 @@ use crate::documents::{handle_media_request, import_book, load_non_pdf_document,
 use crate::downloader::DownloadManager;
 use crate::exporter::{AudioExportSink, SleepInhibitor};
 use crate::models::{
-    BookFormat, Bookmark, BracketMode, ExportFormat, IgnoreRule, PauseSettings, PronunciationRule,
-    QwenModelVariant, SanitizerSettings, SentenceItem, WindowState,
+    AppLanguage, BookFormat, Bookmark, BracketMode, ExportFormat, IgnoreRule, PauseSettings,
+    PronunciationRule, QwenModelVariant, SanitizerSettings, SentenceItem, WindowState,
 };
 use crate::paths::{AppPaths, bundle_container_dir, resolve_release_data_dir};
 use crate::storage::Storage;
@@ -52,7 +52,9 @@ pub fn check_portable_init() -> Result<(), String> {
     println!("APPDATA_DIR={}", paths.appdata_dir.display());
     println!("DATA_DIR={}", paths.data_dir.display());
     ensure(paths.models_dir.is_dir(), "models_dir missing")?;
+    ensure(paths.pocket_models_root.is_dir(), "pocket_models_root missing")?;
     ensure(paths.voices_dir.is_dir(), "voices_dir missing")?;
+    ensure(paths.pocket_voices_root.is_dir(), "pocket_voices_root missing")?;
     ensure(paths.books_dir.is_dir(), "books_dir missing")?;
     Ok(())
 }
@@ -448,6 +450,7 @@ fn run_inner(root: &Path, live_tts: bool) -> Result<(), String> {
             engine.ensure_loaded(&paths)?;
             let raw_pcm = engine.synthesize(
                 &paths,
+                AppLanguage::En,
                 QwenModelVariant::Fast0_6B,
                 None,
                 "Hello from BookReader on this platform.",

@@ -1,7 +1,9 @@
+import { tr } from "../i18n";
 import { invoke } from "../tauri_bridge";
 import { Icons } from "../icons";
 import { formatDuration, isAndroidPlatform, persistSettings, state } from "../state";
 import type { ActiveModal, SleepTimerStatus } from "../types";
+import { escapeAttr, escapeHtml } from "./sidebar";
 
 export interface ToolbarHandlers {
   onOpenModal: (modal: ActiveModal) => void;
@@ -33,6 +35,16 @@ export function closeToolbarPopovers(): void {
   renderPopoverOnly();
 }
 
+export function rerenderToolbar(): void {
+  if (!mountedContainer || !mountedHandlers) return;
+  const prevPopover = openPopover;
+  initToolbar(mountedContainer, mountedHandlers);
+  openPopover = prevPopover;
+  if (openPopover !== null) {
+    renderPopoverOnly();
+  }
+}
+
 export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): void {
   mountedContainer = container;
   mountedHandlers = handlers;
@@ -43,57 +55,57 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
   container.innerHTML = `
     <div class="topbar">
       <div class="toolbar-group">
-        <button class="icon-btn" id="btn-sidebar-expand" title="Open sidebar">${Icons.sidebarToggle()}</button>
-        <button class="icon-btn" id="btn-add-bookmark" title="Bookmark current position">${Icons.bookmark(false)}</button>
-        <div class="toolbar-segmented" id="grp-page-zoom" title="Page Zoom (${modKey} +/- / ${modKey}+Wheel)">
-          <button class="seg-btn" id="btn-zoom-out" title="Zoom out (${modKey}+-)">${Icons.zoomOut()}</button>
-          <button class="seg-val" id="btn-zoom-reset" title="Reset page zoom to 100%">100%</button>
-          <button class="seg-btn" id="btn-zoom-in" title="Zoom in (${modKey}++)">${Icons.zoomIn()}</button>
+        <button class="icon-btn" id="btn-sidebar-expand" title="${escapeAttr(tr("toolbar_open_sidebar"))}">${Icons.sidebarToggle()}</button>
+        <button class="icon-btn" id="btn-add-bookmark" title="${escapeAttr(tr("toolbar_bookmark_pos"))}">${Icons.bookmark(false)}</button>
+        <div class="toolbar-segmented" id="grp-page-zoom" title="${escapeAttr(tr("toolbar_page_zoom", { mod: modKey }))}">
+          <button class="seg-btn" id="btn-zoom-out" title="${escapeAttr(tr("toolbar_zoom_out", { mod: modKey }))}">${Icons.zoomOut()}</button>
+          <button class="seg-val" id="btn-zoom-reset" title="${escapeAttr(tr("toolbar_zoom_reset"))}">100%</button>
+          <button class="seg-btn" id="btn-zoom-in" title="${escapeAttr(tr("toolbar_zoom_in", { mod: modKey }))}">${Icons.zoomIn()}</button>
         </div>
-        <button class="toolbar-chip" id="btn-pdf-reflow" title="Auto-wrap PDF text cleanly at any zoom size">Reflow Text</button>
-        <button class="toolbar-chip" id="btn-pdf-dark-page" title="Invert white PDF pages in dark mode">Dark Page</button>
+        <button class="toolbar-chip" id="btn-pdf-reflow" title="${escapeAttr(tr("toolbar_reflow_tooltip"))}">${escapeHtml(tr("toolbar_reflow_text"))}</button>
+        <button class="toolbar-chip" id="btn-pdf-dark-page" title="${escapeAttr(tr("toolbar_dark_page_tooltip"))}">${escapeHtml(tr("toolbar_dark_page"))}</button>
       </div>
 
       <div class="toolbar-group">
-        <button class="voice-btn" id="btn-voice-picker" title="Select voice">
+        <button class="voice-btn" id="btn-voice-picker" title="${escapeAttr(tr("toolbar_select_voice"))}">
           ${Icons.voice()}
           <span id="lbl-active-voice"></span>
         </button>
 
-        <button class="icon-btn" id="btn-prev-sent" title="Previous sentence (Left Arrow)">
+        <button class="icon-btn" id="btn-prev-sent" title="${escapeAttr(tr("toolbar_prev_sentence"))}">
           ${Icons.prevSentence()}
         </button>
 
-        <button class="play-btn" id="btn-play-pause" title="Play / Pause (Space)"></button>
+        <button class="play-btn" id="btn-play-pause" title="${escapeAttr(tr("toolbar_play_pause"))}"></button>
 
-        <button class="icon-btn" id="btn-next-sent" title="Next sentence (Right Arrow)">
+        <button class="icon-btn" id="btn-next-sent" title="${escapeAttr(tr("toolbar_next_sentence"))}">
           ${Icons.nextSentence()}
         </button>
 
-        <button class="speed-pill" id="btn-speed-pop" title="Playback speed"></button>
+        <button class="speed-pill" id="btn-speed-pop" title="${escapeAttr(tr("toolbar_playback_speed"))}"></button>
 
-        <button class="icon-btn" id="btn-volume-pop" title="Volume">
+        <button class="icon-btn" id="btn-volume-pop" title="${escapeAttr(tr("toolbar_volume"))}">
           ${Icons.volume()}
         </button>
       </div>
 
       <div class="toolbar-group">
-        <button class="icon-btn" id="btn-cc-toggle" title="Toggle Closed Captions">
+        <button class="icon-btn" id="btn-cc-toggle" title="${escapeAttr(tr("toolbar_toggle_cc"))}">
           ${Icons.cc()}
         </button>
-        <div class="toolbar-segmented" id="grp-cc-size" title="Closed Captions Font Size">
-          <button class="seg-btn" id="btn-cc-smaller" title="Smaller captions">A-</button>
-          <button class="seg-val" id="btn-cc-size-reset" title="Reset caption size to 21px">21px</button>
-          <button class="seg-btn" id="btn-cc-larger" title="Larger captions">A+</button>
+        <div class="toolbar-segmented" id="grp-cc-size" title="${escapeAttr(tr("toolbar_cc_font_size"))}">
+          <button class="seg-btn" id="btn-cc-smaller" title="${escapeAttr(tr("toolbar_cc_smaller"))}">A-</button>
+          <button class="seg-val" id="btn-cc-size-reset" title="${escapeAttr(tr("toolbar_cc_reset"))}">21px</button>
+          <button class="seg-btn" id="btn-cc-larger" title="${escapeAttr(tr("toolbar_cc_larger"))}">A+</button>
         </div>
-        <button class="icon-btn" id="btn-search-toggle" title="Search document (${modKey}+F)">
+        <button class="icon-btn" id="btn-search-toggle" title="${escapeAttr(tr("toolbar_search_doc", { mod: modKey }))}">
           ${Icons.search()}
         </button>
-        <button class="icon-btn" id="btn-margins-toggle" title="Header & Footer Ignore Margins (PDF)">
+        <button class="icon-btn" id="btn-margins-toggle" title="${escapeAttr(tr("toolbar_pdf_margins"))}">
           ${Icons.margins()}
         </button>
-        <button class="icon-btn" id="btn-theme-toggle" title="Switch Dark / Light Theme"></button>
-        <button class="icon-btn" id="btn-sleep-pop" title="Sleep Timer">
+        <button class="icon-btn" id="btn-theme-toggle" title="${escapeAttr(tr("toolbar_theme_toggle"))}"></button>
+        <button class="icon-btn" id="btn-sleep-pop" title="${escapeAttr(tr("toolbar_sleep_timer"))}">
           ${Icons.sleepTimer()}
           <span id="lbl-sleep-badge" style="position:absolute;bottom:1px;right:1px;font-size:9px;font-weight:700;"></span>
         </button>
@@ -101,7 +113,7 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
     </div>
 
     <div class="progress-strip">
-      <div class="progress-track" id="progress-seek-track" title="Click to jump in book">
+      <div class="progress-track" id="progress-seek-track" title="${escapeAttr(tr("toolbar_progress_seek"))}">
         <div class="progress-fill" id="progress-fill-bar"></div>
       </div>
       <div class="time-row">
@@ -182,7 +194,7 @@ export function syncToolbar(): void {
   const hasBook = state.activeBook !== null;
   const isPdf = state.activeBook?.format === "pdf";
   const activeVoice =
-    state.voices.find((v) => v.voice_id === state.settings.voice_id)?.name ?? "Default";
+    state.voices.find((v) => v.voice_id === state.settings.voice_id)?.name ?? tr("common_default");
 
   const total = Math.max(1, state.sentences.length);
   const curIdx = Math.min(state.tts.sentence_idx, total - 1);
@@ -222,7 +234,7 @@ export function syncToolbar(): void {
 
   const voiceBtn = container.querySelector<HTMLButtonElement>("#btn-voice-picker");
   const voiceLbl = container.querySelector<HTMLElement>("#lbl-active-voice");
-  if (voiceBtn) voiceBtn.title = `Voice: ${activeVoice}`;
+  if (voiceBtn) voiceBtn.title = tr("toolbar_voice_tooltip", { voice: activeVoice });
   if (voiceLbl) voiceLbl.textContent = activeVoice;
 
   const prevBtn = container.querySelector<HTMLButtonElement>("#btn-prev-sent");
@@ -278,9 +290,9 @@ export function syncToolbar(): void {
   if (sleepBadgeEl) {
     const badge =
       state.sleepTimer.active && state.sleepTimer.mode === "minutes" && state.sleepTimer.remaining_sec !== null
-        ? `${Math.ceil(state.sleepTimer.remaining_sec / 60)}m`
+        ? tr("sleep_badge_min", { min: Math.ceil(state.sleepTimer.remaining_sec / 60) })
         : state.sleepTimer.active && state.sleepTimer.mode === "end_of_chapter"
-          ? "Ch"
+          ? tr("sleep_badge_chapter")
           : "";
     sleepBadgeEl.textContent = badge;
   }
@@ -309,7 +321,7 @@ function renderPopoverOnly(): void {
     host.innerHTML = `
       <div class="popover" style="left:50%;transform:translateX(-50%);" id="toolbar-popover">
         <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px;">
-          <span>Reading Speed</span>
+          <span>${escapeHtml(tr("popover_reading_speed"))}</span>
           <strong id="pop-speed-val">${state.settings.speed.toFixed(2)}x</strong>
         </div>
         <input type="range" id="speed-slider" min="0.5" max="3.0" step="0.02" value="${state.settings.speed}" style="width:100%;" />
@@ -327,7 +339,7 @@ function renderPopoverOnly(): void {
     host.innerHTML = `
       <div class="popover" style="left:56%;transform:translateX(-50%);" id="toolbar-popover">
         <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px;">
-          <span>Volume</span>
+          <span>${escapeHtml(tr("toolbar_volume"))}</span>
           <strong id="pop-vol-val">${Math.round(state.settings.volume * 100)}%</strong>
         </div>
         <input type="range" id="volume-slider" min="0" max="1" step="0.02" value="${state.settings.volume}" style="width:100%;" />
@@ -336,13 +348,13 @@ function renderPopoverOnly(): void {
   } else {
     host.innerHTML = `
       <div class="popover" style="right:14px;" id="toolbar-popover">
-        <div style="font-size:12.5px;font-weight:600;margin-bottom:8px;">Sleep Timer</div>
+        <div style="font-size:12.5px;font-weight:600;margin-bottom:8px;">${escapeHtml(tr("popover_sleep_timer"))}</div>
         <div class="chip-row">
-          <button class="chip" data-sleep-min="15">15 min</button>
-          <button class="chip" data-sleep-min="30">30 min</button>
-          <button class="chip" data-sleep-min="60">60 min</button>
-          <button class="chip" data-sleep-chap="1">End of Chapter</button>
-          ${state.sleepTimer.active ? `<button class="chip" data-sleep-off="1">Turn Off</button>` : ""}
+          <button class="chip" data-sleep-min="15">${escapeHtml(tr("sleep_minutes", { min: 15 }))}</button>
+          <button class="chip" data-sleep-min="30">${escapeHtml(tr("sleep_minutes", { min: 30 }))}</button>
+          <button class="chip" data-sleep-min="60">${escapeHtml(tr("sleep_minutes", { min: 60 }))}</button>
+          <button class="chip" data-sleep-chap="1">${escapeHtml(tr("sleep_end_of_chapter"))}</button>
+          ${state.sleepTimer.active ? `<button class="chip" data-sleep-off="1">${escapeHtml(tr("sleep_turn_off"))}</button>` : ""}
         </div>
       </div>
     `;

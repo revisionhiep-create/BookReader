@@ -111,7 +111,7 @@ jobs:
           cat > release-notes.md <<EOF
           ## BookReader ${TAG}
 
-          Portable offline desktop text-to-speech reader powered by **Phonon 31M** (37 English voices) and local **Qwen3-TTS** voice cloning.
+          Portable offline desktop & Android text-to-speech reader powered by **Phonon 31M** (English, 37 voices) + **Kyutai Pocket TTS** (French, German, Spanish, Portuguese, Italian, Dutch — 27 voices each), full 7-language UI, and local **Qwen3-TTS** voice cloning.
 
           ### Downloads
           - **Windows (x64 Portable)**: \`BookReader.exe\` — place in its own folder (creates \`BookReader_Data/\` next to it). See [windows/README.md](windows/README.md).

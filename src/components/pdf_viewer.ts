@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { invoke } from "../tauri_bridge";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -133,7 +134,7 @@ export class PdfViewer {
     this.container.innerHTML = `
       <div class="pdf-loading-card">
         <span class="loading-spinner" aria-hidden="true"></span>
-        <span id="pdf-loading-msg">Loading book &amp; restoring last reading position, please wait...</span>
+        <span id="pdf-loading-msg">${escapeHtml(tr("pdf_loading_restore"))}</span>
       </div>
     `;
     const loadingMsgEl = this.container.querySelector<HTMLElement>("#pdf-loading-msg");
@@ -143,7 +144,7 @@ export class PdfViewer {
       onProgress?.(msg);
     };
 
-    reportProgress("Opening PDF document, please wait...");
+    reportProgress(tr("pdf_opening"));
     const mediaBase = state.bootstrap?.media_base_url ?? "http://bookmedia.localhost";
     const url = `${mediaBase}/book/${book.id}`;
     this.loadingTask = pdfjsLib.getDocument({ url });
@@ -165,14 +166,14 @@ export class PdfViewer {
       const vp = page.getViewport({ scale: 1.0 });
       this.basePageDimensions.push({ width: vp.width, height: vp.height });
       if (p === 1 || p % 25 === 0 || p === numPages) {
-        reportProgress(`Preparing pages (${p} / ${numPages}), please wait...`);
+        reportProgress(tr("pdf_preparing_pages", { current: p, total: numPages }));
       }
     }
 
     const extracted = await this.extractSentencesData(false, mountGen, reportProgress);
     if (!extracted || mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
 
-    reportProgress("Jumping to your last reading position, please wait...");
+    reportProgress(tr("pdf_jumping_position"));
     this.sentenceRects = extracted.rects;
     this.extractedSentences = extracted.sentences;
     this.pageSentences = extracted.pageSentences;
@@ -266,7 +267,7 @@ export class PdfViewer {
     article.className = "br-prose pdf-reflow-prose";
 
     if (this.extractedSentences.length === 0) {
-      article.innerHTML = "<p>No readable text found in this PDF.</p>";
+      article.innerHTML = `<p>${escapeHtml(tr("pdf_no_text"))}</p>`;
     } else {
       const totalPages = this.pdfDoc.numPages;
       const byPage = new Map<number, SentenceItem[]>();
@@ -310,7 +311,7 @@ export class PdfViewer {
 
         const sep =
           totalPages > 1
-            ? `<div class="pdf-reflow-page-sep">Page ${p}</div>`
+            ? `<div class="pdf-reflow-page-sep">${escapeHtml(tr("pdf_page_sep", { page: p }))}</div>`
             : "";
         blocksHtml.push(
           `<section class="pdf-reflow-page-block" data-page="${p}">${sep}${paraHtml}</section>`,
@@ -447,7 +448,7 @@ export class PdfViewer {
       topCurtain.innerHTML = `
         <div class="ignore-handle" data-edge="top" style="touch-action:none;">
           <div class="ignore-line"></div>
-          <span class="ignore-pill">Header</span>
+          <span class="ignore-pill">${escapeHtml(tr("pdf_header_label"))}</span>
         </div>
       `;
       card.appendChild(topCurtain);
@@ -457,7 +458,7 @@ export class PdfViewer {
       botCurtain.innerHTML = `
         <div class="ignore-handle" data-edge="bottom" style="touch-action:none;">
           <div class="ignore-line"></div>
-          <span class="ignore-pill">Footer</span>
+          <span class="ignore-pill">${escapeHtml(tr("pdf_footer_label"))}</span>
         </div>
       `;
       card.appendChild(botCurtain);
@@ -510,15 +511,15 @@ export class PdfViewer {
 
     anchor.innerHTML = `
       <div class="pdf-toolbar-strip" style="flex-wrap:wrap;border-radius:12px;">
-        <span><strong>Drag lines on any page</strong></span>
-        <span>Top: <strong id="lbl-hdr-pct">${headerPct}%</strong></span>
-        <span>Bottom: <strong id="lbl-ftr-pct">${footerPct}%</strong></span>
+        <span><strong>${escapeHtml(tr("pdf_margins_drag_hint"))}</strong></span>
+        <span>${escapeHtml(tr("pdf_margins_top"))} <strong id="lbl-hdr-pct">${headerPct}%</strong></span>
+        <span>${escapeHtml(tr("pdf_margins_bottom"))} <strong id="lbl-ftr-pct">${footerPct}%</strong></span>
         <label class="checkbox-label" style="font-size:12px;">
           <input type="checkbox" id="chk-keep-blur" ${state.settings.keep_blur_visible ? "checked" : ""}/>
-          Keep blur visible
+          ${escapeHtml(tr("pdf_margins_keep_blur"))}
         </label>
-        <button class="chip" id="btn-save-default-margins">Save as default</button>
-        <button class="btn-primary" style="padding:4px 10px;font-size:12px;" id="btn-margins-done">Done</button>
+        <button class="chip" id="btn-save-default-margins">${escapeHtml(tr("pdf_margins_save_default"))}</button>
+        <button class="btn-primary" style="padding:4px 10px;font-size:12px;" id="btn-margins-done">${escapeHtml(tr("common_done"))}</button>
       </div>
     `;
 
@@ -622,7 +623,7 @@ export class PdfViewer {
         const h = topC.querySelector<HTMLElement>(".ignore-handle");
         const pill = topC.querySelector<HTMLElement>(".ignore-pill");
         if (h) h.style.display = editing ? "flex" : "none";
-        if (pill) pill.textContent = `Header ${Math.round(hdr * 100)}%`;
+        if (pill) pill.textContent = `${tr("pdf_header_label")} ${Math.round(hdr * 100)}%`;
       }
       if (botC) {
         botC.style.display = showBlur && (editing || ftr > 0.002) ? "block" : "none";
@@ -630,7 +631,7 @@ export class PdfViewer {
         const h = botC.querySelector<HTMLElement>(".ignore-handle");
         const pill = botC.querySelector<HTMLElement>(".ignore-pill");
         if (h) h.style.display = editing ? "flex" : "none";
-        if (pill) pill.textContent = `Footer ${Math.round(ftr * 100)}%`;
+        if (pill) pill.textContent = `${tr("pdf_footer_label")} ${Math.round(ftr * 100)}%`;
       }
     });
   }
@@ -777,7 +778,7 @@ export class PdfViewer {
     for (let p = 1; p <= numPages; p++) {
       if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
       if (p === 1 || p % 15 === 0 || p === numPages) {
-        onProgress?.(`Indexing page ${p} of ${numPages}, please wait...`);
+        onProgress?.(tr("pdf_indexing_page", { current: p, total: numPages }));
       }
       const page = await doc.getPage(p);
       if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
@@ -861,7 +862,7 @@ export class PdfViewer {
           }
           const sid = sentences.findIndex((s) => (s.page ?? 1) >= pageNum);
           toc.push({
-            title: item.title || `Page ${pageNum}`,
+            title: item.title || tr("pdf_page_sep", { page: pageNum }),
             sentence_idx: Math.max(0, sid),
             page: pageNum,
             level,

@@ -1,3 +1,6 @@
+import type { AppLanguage } from "./i18n";
+
+export type { AppLanguage };
 export type ThemeMode = "dark" | "light";
 export type BracketMode = "strip_brackets_read_inner" | "skip_bracketed_content" | "keep";
 export type BookFormat = "pdf" | "epub" | "docx" | "txt";
@@ -34,6 +37,8 @@ export interface TypographySettings {
 
 export interface Settings {
   theme: ThemeMode;
+  ui_language: AppLanguage | null;
+  tts_language: AppLanguage;
   voice_id: string;
   qwen_model_variant: QwenModelVariant;
   speed: number;
@@ -128,13 +133,31 @@ export interface DocumentPayload {
 export interface VoiceInfo {
   voice_id: string;
   name: string;
+  language: string;
   locale: string;
   gender: string;
   age: string;
   description: string;
   downloaded: boolean;
-  engine: "phonon" | "qwen_clone";
+  engine: "phonon" | "pocket" | "qwen_clone";
   is_cloned: boolean;
+  is_native?: boolean;
+}
+
+export interface LanguageModelStatus {
+  language: AppLanguage;
+  engine: string;
+  model_id: string;
+  ready: boolean;
+  loaded: boolean;
+  estimated_size_mb: number;
+  default_voice_id: string;
+}
+
+export interface SetTtsLanguageResponse {
+  settings: Settings;
+  voices: VoiceInfo[];
+  language_models: LanguageModelStatus[];
 }
 
 export interface ClonedVoiceMeta {
@@ -195,6 +218,7 @@ export interface DeleteClonedVoiceResponse {
 export interface AppBootstrap {
   model_ready: boolean;
   engine_loaded: boolean;
+  language_models: LanguageModelStatus[];
   qwen_model_variant: QwenModelVariant;
   qwen_model_ready: boolean;
   qwen_device_label: string;

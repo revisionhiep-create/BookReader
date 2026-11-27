@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { Icons } from "../icons";
 import { isAndroidPlatform, isVoiceCloningEnabled, persistSettings, state } from "../state";
 import type { ActiveModal } from "../types";
@@ -23,7 +24,7 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
   }
 
   const isPlaying = state.tts.status === "playing" || state.tts.status === "loading";
-  const bookTitle = state.activeBook ? state.activeBook.title : "No book selected";
+  const bookTitle = state.activeBook ? state.activeBook.title : tr("sidebar_no_book");
   const cloningEnabled = isVoiceCloningEnabled();
   const clonedCount = cloningEnabled ? state.voices.filter((v) => v.is_cloned).length : 0;
   const exp = state.exportProgress;
@@ -34,14 +35,14 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
     <div class="sidebar-header">
       <div class="brand-mark">
         ${Icons.brandLogo(19)}
-        <span>BookReader</span>
+        <span>${escapeHtml(tr("app_title"))}</span>
       </div>
-      <button class="icon-btn" id="btn-sidebar-collapse" title="Collapse sidebar">
+      <button class="icon-btn" id="btn-sidebar-collapse" title="${escapeAttr(tr("sidebar_collapse"))}">
         ${Icons.sidebarToggle()}
       </button>
     </div>
 
-    <div class="sidebar-section-label">Now Reading</div>
+    <div class="sidebar-section-label">${escapeHtml(tr("sidebar_now_reading"))}</div>
     <div class="now-reading-pill" title="${escapeAttr(bookTitle)}">
       <div class="eq-bars ${isPlaying ? "active" : ""}">
         <span></span><span></span><span></span>
@@ -52,33 +53,33 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
     <nav class="sidebar-nav">
       <button class="nav-btn" data-modal="library">
         ${Icons.library()}
-        <span>Library</span>
+        <span>${escapeHtml(tr("sidebar_nav_library"))}</span>
         <span class="badge">${state.library.length}</span>
       </button>
       <button class="nav-btn" data-modal="pronunciation">
         ${Icons.pronunciation()}
-        <span>Pronunciation</span>
+        <span>${escapeHtml(tr("sidebar_nav_pronunciation"))}</span>
         <span class="badge">${state.pronunciations.length}</span>
       </button>
       <button class="nav-btn" data-modal="ignore">
         ${Icons.ignoreWords()}
-        <span>Ignore Words</span>
+        <span>${escapeHtml(tr("sidebar_nav_ignore"))}</span>
         <span class="badge">${state.ignoreRules.length}</span>
       </button>
       <button class="nav-btn" data-modal="toc">
         ${Icons.chapters()}
-        <span>Chapters &amp; Bookmarks</span>
+        <span>${escapeHtml(tr("sidebar_nav_toc"))}</span>
       </button>
       <button class="nav-btn" data-modal="export">
         ${Icons.exportAudio()}
-        <span>Export Audio</span>
+        <span>${escapeHtml(tr("sidebar_nav_export"))}</span>
       </button>
       ${
         cloningEnabled
           ? `
       <button class="nav-btn" data-modal="voice_clone">
         ${Icons.voiceClone()}
-        <span>Voice Cloning</span>
+        <span>${escapeHtml(tr("sidebar_nav_voice_clone"))}</span>
         ${clonedCount > 0 ? `<span class="badge">${clonedCount}</span>` : ""}
       </button>
       `
@@ -86,16 +87,16 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
       }
       <button class="nav-btn" data-modal="settings">
         ${Icons.settings()}
-        <span>Settings</span>
+        <span>${escapeHtml(tr("sidebar_nav_settings"))}</span>
       </button>
     </nav>
 
     ${
       showMiniExport && exp
         ? `
-      <div class="sidebar-export-mini" id="btn-mini-export" title="Click to open Export progress">
+      <div class="sidebar-export-mini" id="btn-mini-export" title="${escapeAttr(tr("sidebar_export_progress_tooltip"))}">
         <div style="display:flex;justify-content:space-between;font-size:11.5px;">
-          <span>Exporting ${exp.format.toUpperCase()}</span>
+          <span>${escapeHtml(tr("sidebar_exporting_fmt", { format: exp.format.toUpperCase() }))}</span>
           <span>${exp.percent.toFixed(0)}%</span>
         </div>
         <div class="mini-bar-track">

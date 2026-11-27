@@ -111,6 +111,8 @@ pub fn run() {
             commands::create_cloned_voice,
             commands::delete_cloned_voice,
             commands::download_model,
+            commands::download_language_model,
+            commands::set_tts_language,
             commands::download_voice,
             commands::download_all_voices,
             commands::list_voices,

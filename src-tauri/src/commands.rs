@@ -5,11 +5,11 @@ use crate::downloader::DownloadManager;
 use crate::exporter::ExportManager;
 use crate::media_keys::MediaKeysBridge;
 use crate::models::{
-    AppBootstrap, AudioClipProbe, BookFormat, BookMeta, Bookmark, CloneVoiceRequest,
+    AppBootstrap, AppLanguage, AudioClipProbe, BookFormat, BookMeta, Bookmark, CloneVoiceRequest,
     CloneVoiceResponse, DeleteClonedVoiceResponse, DocumentPayload, ExportProgressEvent,
-    ExportRequest, IgnoreRule, PronunciationRule, QwenModelStatus, QwenModelVariant,
-    QwenVariantStatus, SentenceItem, SetQwenVariantResponse, Settings, SleepTimerStatus,
-    TtsStateEvent, VoiceInfo,
+    ExportRequest, IgnoreRule, LanguageModelStatus, PronunciationRule, QwenModelStatus,
+    QwenModelVariant, QwenVariantStatus, SentenceItem, SetQwenVariantResponse,
+    SetTtsLanguageResponse, Settings, SleepTimerStatus, TtsStateEvent, VoiceInfo,
 };
 use crate::paths::AppPaths;
 use crate::sleep_timer::SleepTimer;
@@ -17,7 +17,7 @@ use crate::storage::{Storage, now_unix_secs};
 use crate::text_pipeline::validate_rule_pattern;
 use crate::tts::TtsController;
 use crate::tts::qwen_engine::{decode_reference_slice, probe_audio_clip};
-use crate::voices::{list_voices_with_status, pick_downloaded_fallback_voice};
+use crate::voices::{list_voices_with_status, pick_downloaded_fallback_voice_for_lang};
 use std::path::Path;
 #[cfg(not(target_os = "android"))]
 use std::path::PathBuf;
@@ -33,6 +33,40 @@ pub struct AppState {
     pub sleep_timer: Arc<SleepTimer>,
 }
 
+fn build_language_models(storage: &Storage, tts: &TtsController) -> Vec<LanguageModelStatus> {
+    let paths = storage.paths();
+    let engine = tts.engine();
+    AppLanguage::all()
+        .into_iter()
+        .map(|lang| {
+            let loaded = if lang == AppLanguage::En {
+                engine.is_loaded()
+            } else {
+                engine.pocket().is_language_loaded(lang)
+            };
+            LanguageModelStatus {
+                language: lang,
+                engine: lang.engine_id().to_string(),
+                model_id: lang.model_id().to_string(),
+                ready: paths.language_model_ready(lang),
+                loaded,
+                estimated_size_mb: lang.estimated_size_mb(),
+                default_voice_id: lang.default_voice_id().to_string(),
+            }
+        })
+        .collect()
+}
+
+fn voice_matches_language(voice_id: &str, lang: AppLanguage) -> bool {
+    if AppPaths::is_cloned_voice_id(voice_id) {
+        return true;
+    }
+    match AppPaths::parse_pocket_voice_id(voice_id) {
+        Some((vlang, _)) => vlang == lang,
+        None => lang == AppLanguage::En,
+    }
+}
+
 fn build_bootstrap(storage: &Storage, tts: &TtsController) -> AppBootstrap {
     let paths = storage.paths();
     let voice_cloning_enabled = cfg!(feature = "voice-cloning") && !cfg!(target_os = "android");
@@ -42,11 +76,40 @@ fn build_bootstrap(storage: &Storage, tts: &TtsController) -> AppBootstrap {
         Vec::new()
     };
     let mut settings = storage.settings();
-    if !voice_cloning_enabled && AppPaths::is_cloned_voice_id(&settings.voice_id) {
-        settings.voice_id = pick_downloaded_fallback_voice(paths);
-        let _ = storage.save_settings(settings.clone());
+    let mut settings_dirty = false;
+
+    if !paths.language_model_ready(settings.tts_language)
+        && let Some(first_ready) = paths.first_ready_tts_language()
+    {
+        settings.tts_language = first_ready;
+        if !AppPaths::is_cloned_voice_id(&settings.voice_id)
+            && !voice_matches_language(&settings.voice_id, first_ready)
+        {
+            settings.voice_id = pick_downloaded_fallback_voice_for_lang(paths, first_ready);
+        }
+        settings_dirty = true;
     }
+
+    if !voice_cloning_enabled && AppPaths::is_cloned_voice_id(&settings.voice_id) {
+        settings.voice_id = pick_downloaded_fallback_voice_for_lang(paths, settings.tts_language);
+        settings_dirty = true;
+    }
+
+    if settings.ui_language.is_none() && paths.any_tts_model_ready() {
+        settings.ui_language = Some(AppLanguage::En);
+        settings_dirty = true;
+    }
+
+    if settings_dirty {
+        settings = storage.save_settings(settings.clone()).unwrap_or(settings);
+    }
+
     let variant = settings.qwen_model_variant;
+    let engine_loaded = if settings.tts_language == AppLanguage::En {
+        tts.engine().is_loaded()
+    } else {
+        tts.engine().pocket().is_language_loaded(settings.tts_language)
+    };
     let platform = if cfg!(target_os = "android") {
         "android"
     } else if cfg!(target_os = "macos") {
@@ -57,8 +120,9 @@ fn build_bootstrap(storage: &Storage, tts: &TtsController) -> AppBootstrap {
         "linux"
     };
     AppBootstrap {
-        model_ready: paths.model_ready(),
-        engine_loaded: tts.is_model_loaded(),
+        model_ready: paths.any_tts_model_ready(),
+        engine_loaded,
+        language_models: build_language_models(storage, tts),
         qwen_model_variant: variant,
         qwen_model_ready: voice_cloning_enabled && paths.qwen_model_ready_for(variant),
         qwen_device_label: if voice_cloning_enabled {
@@ -143,6 +207,43 @@ fn validate_voice_ready(storage: &Storage, voice_id: &str) -> Result<(), String>
     if AppPaths::is_cloned_voice_id(voice_id) {
         let variant = storage.settings().qwen_model_variant;
         validate_cloned_voice_ready(storage, voice_id, variant)?;
+    } else if let Some((lang, _slug)) = AppPaths::parse_pocket_voice_id(voice_id) {
+        if !paths.language_model_ready(lang) {
+            return Err(format!(
+                "Pocket TTS ({}) model files are not downloaded yet",
+                lang.code()
+            ));
+        }
+        if !paths.is_voice_downloaded(voice_id) {
+            return Err(format!(
+                "Pocket TTS voice ({voice_id}) is not downloaded yet"
+            ));
+        }
+    } else if !paths.model_ready() {
+        return Err("Phonon 31M model files are not downloaded yet".to_string());
+    }
+    Ok(())
+}
+
+async fn ensure_playback_voice_ready(
+    app: &AppHandle,
+    state: &AppState,
+    voice_id: &str,
+) -> Result<(), String> {
+    let paths = state.storage.paths();
+    if AppPaths::is_cloned_voice_id(voice_id) {
+        let variant = state.storage.settings().qwen_model_variant;
+        validate_cloned_voice_ready(&state.storage, voice_id, variant)?;
+    } else if let Some((lang, _slug)) = AppPaths::parse_pocket_voice_id(voice_id) {
+        if !paths.language_model_ready(lang) {
+            return Err(format!(
+                "Pocket TTS ({}) model files are not downloaded yet",
+                lang.code()
+            ));
+        }
+        if !paths.is_voice_downloaded(voice_id) {
+            state.downloader.download_voice(app, paths, voice_id).await?;
+        }
     } else if !paths.model_ready() {
         return Err("Phonon 31M model files are not downloaded yet".to_string());
     }
@@ -302,8 +403,12 @@ pub async fn delete_cloned_voice(
     let remaining = state.storage.delete_cloned_voice(&voice_id)?;
     let mut settings = state.storage.settings();
     if active_playing {
-        settings.voice_id = pick_downloaded_fallback_voice(state.storage.paths());
+        settings.voice_id =
+            pick_downloaded_fallback_voice_for_lang(state.storage.paths(), settings.tts_language);
         settings = state.storage.save_settings(settings)?;
+        if !state.exporter.is_exporting_cloned_voice() {
+            state.tts.engine().unload_qwen();
+        }
         state.tts.refresh_pipeline();
     }
 
@@ -312,13 +417,97 @@ pub async fn delete_cloned_voice(
 }
 
 #[tauri::command]
-pub async fn download_model(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let default_vid = state.storage.settings().voice_id;
+pub async fn download_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    language: Option<AppLanguage>,
+) -> Result<(), String> {
+    let target = language.unwrap_or_else(|| state.storage.settings().tts_language);
+    let active_settings = state.storage.settings();
+    let default_vid = (target == active_settings.tts_language)
+        .then_some(active_settings.voice_id);
     state
         .downloader
-        .download_phonon_model(&app, state.storage.paths(), Some(&default_vid))
+        .download_language_model(&app, state.storage.paths(), target, default_vid.as_deref())
         .await?;
-    state.tts.ensure_model_loaded()
+    let tts = Arc::clone(&state.tts);
+    tokio::task::spawn_blocking(move || tts.ensure_language_loaded(target))
+        .await
+        .map_err(|e| format!("Failed joining model loader task: {e}"))?
+}
+
+#[tauri::command]
+pub async fn download_language_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    language: AppLanguage,
+) -> Result<Vec<LanguageModelStatus>, String> {
+    state
+        .downloader
+        .download_language_model(&app, state.storage.paths(), language, None)
+        .await?;
+    let tts = Arc::clone(&state.tts);
+    let storage = Arc::clone(&state.storage);
+    tokio::task::spawn_blocking(move || {
+        if storage.settings().tts_language == language {
+            tts.ensure_language_loaded(language)?;
+        }
+        Ok::<Vec<LanguageModelStatus>, String>(build_language_models(&storage, &tts))
+    })
+    .await
+    .map_err(|e| format!("Failed joining language model loader task: {e}"))?
+}
+
+#[tauri::command]
+pub async fn set_tts_language(
+    state: State<'_, AppState>,
+    language: AppLanguage,
+) -> Result<SetTtsLanguageResponse, String> {
+    if !state.storage.paths().language_model_ready(language) {
+        return Err(format!(
+            "TTS model for {} is not downloaded yet",
+            language.code()
+        ));
+    }
+
+    if language == AppLanguage::En {
+        state.tts.engine().unload_pocket();
+    } else {
+        state.tts.engine().unload_phonon();
+    }
+
+    let mut settings = state.storage.settings();
+    settings.tts_language = language;
+    if !voice_matches_language(&settings.voice_id, language) {
+        settings.voice_id =
+            pick_downloaded_fallback_voice_for_lang(state.storage.paths(), language);
+    }
+    let saved = state.storage.save_settings(settings)?;
+
+    if !AppPaths::is_cloned_voice_id(&saved.voice_id) && !state.exporter.is_exporting_cloned_voice()
+    {
+        state.tts.engine().unload_qwen();
+    }
+
+    let tts = Arc::clone(&state.tts);
+    let storage = Arc::clone(&state.storage);
+    let is_cloned = AppPaths::is_cloned_voice_id(&saved.voice_id);
+    let language_models = tokio::task::spawn_blocking(move || {
+        if !is_cloned {
+            tts.ensure_language_loaded(language)?;
+        }
+        tts.refresh_pipeline();
+        Ok::<Vec<LanguageModelStatus>, String>(build_language_models(&storage, &tts))
+    })
+    .await
+    .map_err(|e| format!("Failed joining language switch task: {e}"))??;
+
+    let voices = list_voices_with_status(state.storage.paths(), &state.storage.cloned_voices());
+    Ok(SetTtsLanguageResponse {
+        settings: saved,
+        voices,
+        language_models,
+    })
 }
 
 #[tauri::command]
@@ -341,10 +530,12 @@ pub async fn download_voice(
 pub async fn download_all_voices(
     app: AppHandle,
     state: State<'_, AppState>,
+    language: Option<AppLanguage>,
 ) -> Result<Vec<VoiceInfo>, String> {
+    let target = language.unwrap_or_else(|| state.storage.settings().tts_language);
     state
         .downloader
-        .download_all_voices(&app, state.storage.paths())
+        .download_all_voices_for_language(&app, state.storage.paths(), target)
         .await?;
     Ok(list_voices_with_status(
         state.storage.paths(),
@@ -407,9 +598,27 @@ pub async fn select_voice(
             .download_voice(&app, state.storage.paths(), &voice_id)
             .await?;
     }
+
     let mut settings = state.storage.settings();
-    settings.voice_id = voice_id;
+    settings.voice_id = voice_id.clone();
+
+    if let Some((voice_lang, _)) = AppPaths::parse_pocket_voice_id(&voice_id) {
+        if state.storage.paths().language_model_ready(voice_lang) {
+            settings.tts_language = voice_lang;
+            state.tts.engine().unload_phonon();
+        }
+    } else if !AppPaths::is_cloned_voice_id(&voice_id)
+        && state.storage.paths().language_model_ready(AppLanguage::En)
+    {
+        settings.tts_language = AppLanguage::En;
+        state.tts.engine().unload_pocket();
+    }
+
     let saved = state.storage.save_settings(settings)?;
+    if !AppPaths::is_cloned_voice_id(&saved.voice_id) && !state.exporter.is_exporting_cloned_voice()
+    {
+        state.tts.engine().unload_qwen();
+    }
     state.tts.refresh_pipeline();
     Ok(saved)
 }
@@ -689,9 +898,13 @@ pub fn delete_book(state: State<'_, AppState>, book_id: String) -> Result<Vec<Bo
 
 #[tauri::command]
 pub async fn tts_play_from(
+    app: AppHandle,
     state: State<'_, AppState>,
     sentence_idx: usize,
 ) -> Result<TtsStateEvent, String> {
+    let voice_id = state.storage.settings().voice_id;
+    ensure_playback_voice_ready(&app, &state, &voice_id).await?;
+
     let storage = Arc::clone(&state.storage);
     let tts = Arc::clone(&state.tts);
     let media_keys = Arc::clone(&state.media_keys);
@@ -716,7 +929,15 @@ pub async fn tts_play_from(
 }
 
 #[tauri::command]
-pub async fn tts_toggle_play_pause(state: State<'_, AppState>) -> Result<TtsStateEvent, String> {
+pub async fn tts_toggle_play_pause(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<TtsStateEvent, String> {
+    if !state.tts.is_actively_playing() {
+        let voice_id = state.storage.settings().voice_id;
+        ensure_playback_voice_ready(&app, &state, &voice_id).await?;
+    }
+
     let storage = Arc::clone(&state.storage);
     let tts = Arc::clone(&state.tts);
     let media_keys = Arc::clone(&state.media_keys);

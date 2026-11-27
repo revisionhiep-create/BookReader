@@ -1,16 +1,19 @@
-//! Native Rust Phonon 31M inference engine wrapper using `ptts 0.7.1`.
+//! Unified multi-engine TTS dispatcher routing across Phonon 31M (EN),
+//! Kyutai Pocket TTS (FR/DE/ES/PT/IT/NL), and Qwen3-TTS Base voice cloning.
 
-use crate::models::{ClonedVoiceMeta, QwenModelVariant};
+use crate::models::{AppLanguage, ClonedVoiceMeta, QwenModelVariant};
 use crate::paths::AppPaths;
+use crate::tts::pocket_engine::PocketEngine;
 use crate::tts::qwen_engine::QwenCloneEngine;
 use ptts::checkpoint::read_config;
 use ptts::preprocess::Lang;
 use ptts::synth::{DeviceKind, Quant, SpeechOptions, Synth, SynthBuilder};
 use std::sync::RwLock;
 
-/// Thread-safe lazy wrapper around the loaded `ptts::synth::Synth` model and Qwen3-TTS cloner.
+/// Thread-safe lazy wrapper around Phonon 31M, Kyutai Pocket TTS, and Qwen3-TTS cloner.
 pub struct PhononEngine {
     synth: RwLock<Option<Synth>>,
+    pocket: PocketEngine,
     qwen: QwenCloneEngine,
 }
 
@@ -18,8 +21,13 @@ impl PhononEngine {
     pub fn new() -> Self {
         Self {
             synth: RwLock::new(None),
+            pocket: PocketEngine::new(),
             qwen: QwenCloneEngine::new(),
         }
+    }
+
+    pub fn pocket(&self) -> &PocketEngine {
+        &self.pocket
     }
 
     pub fn qwen(&self) -> &QwenCloneEngine {
@@ -28,6 +36,18 @@ impl PhononEngine {
 
     pub fn is_loaded(&self) -> bool {
         self.synth.read().unwrap().is_some()
+    }
+
+    pub fn unload_phonon(&self) {
+        *self.synth.write().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    pub fn unload_pocket(&self) {
+        self.pocket.unload();
+    }
+
+    pub fn unload_qwen(&self) {
+        self.qwen.unload();
     }
 
     /// Loads whichever TTS engine is needed for `voice_id` and `qwen_variant`.
@@ -39,6 +59,8 @@ impl PhononEngine {
     ) -> Result<(), String> {
         if AppPaths::is_cloned_voice_id(voice_id) {
             self.qwen.ensure_loaded(paths, qwen_variant)
+        } else if let Some((lang, _slug)) = AppPaths::parse_pocket_voice_id(voice_id) {
+            self.pocket.ensure_loaded(paths, lang)
         } else {
             self.ensure_loaded(paths)
         }
@@ -107,19 +129,28 @@ impl PhononEngine {
         Ok(voice_id.to_string())
     }
 
-    /// Synthesizes one cleaned sentence of English text into 24 kHz mono PCM.
+    /// Synthesizes one cleaned sentence into 24 kHz mono PCM using the engine matching `voice_id`.
     pub fn synthesize(
         &self,
         paths: &AppPaths,
+        tts_language: AppLanguage,
         qwen_variant: QwenModelVariant,
         cloned_meta: Option<&ClonedVoiceMeta>,
         text: &str,
         voice_id: &str,
     ) -> Result<Vec<f32>, String> {
         if AppPaths::is_cloned_voice_id(voice_id) {
-            return self
-                .qwen
-                .synthesize(paths, qwen_variant, text, voice_id, cloned_meta);
+            return self.qwen.synthesize(
+                paths,
+                qwen_variant,
+                tts_language,
+                text,
+                voice_id,
+                cloned_meta,
+            );
+        }
+        if let Some((lang, slug)) = AppPaths::parse_pocket_voice_id(voice_id) {
+            return self.pocket.synthesize(paths, lang, slug, text);
         }
 
         let active_voice = self

@@ -1,11 +1,15 @@
 import type { Event, UnlistenFn } from "@tauri-apps/api/event";
+import { SUPPORTED_LANGUAGES } from "../../src/i18n";
 import type {
   AppBootstrap,
+  AppLanguage,
   BookMeta,
   DocumentPayload,
   IgnoreRule,
+  LanguageModelStatus,
   PronunciationRule,
   SentenceItem,
+  SetTtsLanguageResponse,
   Settings,
   SleepTimerStatus,
   TocEntry,
@@ -32,6 +36,45 @@ const SAMPLE_SENTENCES_TEXT = [
   "Gavin adjusted the strap of his lantern and stepped onto the narrow stone stairs descending into the gallery.",
   "The air grew noticeably cooler as the muffled hum of surface machinery faded behind them.",
 ];
+
+const POCKET_VOICE_ENTRIES: Array<[string, string, string, string, string]> = [
+  ["alba", "Alba", "female", "Young Adult", "Warm, natural voice with clear, gentle phrasing."],
+  ["anna", "Anna", "female", "Adult", "Clear, expressive narrator with poised, balanced delivery."],
+  ["azelma", "Azelma", "female", "Young", "Bright, lively voice with crisp, energetic cadence."],
+  ["bill_boerst", "Bill Boerst", "male", "Middle-age", "Steady, seasoned narrator with rich narrative depth."],
+  ["caro_davy", "Caro Davy", "female", "Adult", "Warm, intimate voice ideal for literary prose."],
+  ["charles", "Charles", "male", "Middle-age", "Refined, articulate voice with calm authority."],
+  ["cosette", "Cosette", "female", "Young Adult", "Soft, lyrical voice with clear, flowing diction."],
+  ["daan", "Daan", "male", "Adult", "Clear, warm narrator with steady conversational flow."],
+  ["eponine", "Eponine", "female", "Young Adult", "Expressive, spirited voice with strong dramatic range."],
+  ["estelle", "Estelle", "female", "Adult", "Warm, natural narrator with clear, expressive phrasing."],
+  ["eve", "Eve", "female", "Adult", "Crisp, modern, and attentive delivery with clean pacing."],
+  ["fantine", "Fantine", "female", "Adult", "Tender, soulful voice with expressive emotional nuance."],
+  ["george", "George", "male", "Middle-age", "Resonant, reassuring voice with traditional narrative gravity."],
+  ["giovanni", "Giovanni", "male", "Adult", "Rich, melodic narrator with expressive, natural cadence."],
+  ["jane", "Jane", "female", "Adult", "Clear, poised narrator with natural, unhurried clarity."],
+  ["javert", "Javert", "male", "Middle-age", "Firm, commanding baritone with disciplined, serious cadence."],
+  ["jean", "Jean", "male", "Middle-age", "Deep, earnest voice with strong weight and steady warmth."],
+  ["juergen", "Jürgen", "male", "Adult", "Measured, authoritative narrator with crisp articulation."],
+  ["lola", "Lola", "female", "Adult", "Warm, expressive narrator with natural conversational flow."],
+  ["marius", "Marius", "male", "Young Adult", "Youthful, ardent voice with lively conversational flow."],
+  ["mary", "Mary", "female", "Middle-age", "Warm, kindly voice with comforting, steady narration."],
+  ["michael", "Michael", "male", "Adult", "Clean, versatile narrator with even, approachable tone."],
+  ["paul", "Paul", "male", "Adult", "Crisp, direct delivery with clear, confident articulation."],
+  ["peter_yearsley", "Peter Yearsley", "male", "Older", "Rich, distinguished voice with theatrical storytelling flair."],
+  ["rafael", "Rafael", "male", "Adult", "Smooth, articulate narrator with steady narrative pacing."],
+  ["stuart_bell", "Stuart Bell", "male", "Middle-age", "Steady, understated voice with clear, natural cadence."],
+  ["vera", "Vera", "female", "Adult", "Calm, resonant voice with thoughtful, measured pacing."],
+];
+
+const POCKET_NATIVE_SLUG: Record<Exclude<AppLanguage, "en">, string> = {
+  fr: "estelle",
+  de: "juergen",
+  es: "lola",
+  pt: "rafael",
+  it: "giovanni",
+  nl: "daan",
+};
 
 function buildSampleVoices(): VoiceInfo[] {
   const entries: Array<[string, string, string, string, string, string]> = [
@@ -73,9 +116,10 @@ function buildSampleVoices(): VoiceInfo[] {
     ["y2eiKxtQo2B67deU", "Sir Bramwell", "characters", "character", "Middle-age", "Booming, theatrical English knight full of grand bravado."],
     ["QXNr0SvkukLB4wPq", "Fairy Godmother", "characters", "character", "Older", "Warm, velvety alto voice, cozy, unhurried, and reassuring."],
   ];
-  return entries.map(([voice_id, name, locale, gender, age, description]) => ({
+  const enVoices: VoiceInfo[] = entries.map(([voice_id, name, locale, gender, age, description]) => ({
     voice_id,
     name,
+    language: "en",
     locale,
     gender,
     age,
@@ -83,7 +127,34 @@ function buildSampleVoices(): VoiceInfo[] {
     downloaded: true,
     engine: "phonon",
     is_cloned: false,
+    is_native: false,
   }));
+
+  const pocketVoices: VoiceInfo[] = [];
+  for (const lang of ["fr", "de", "es", "pt", "it", "nl"] as const) {
+    const nativeSlug = POCKET_NATIVE_SLUG[lang];
+    const ordered = [
+      ...POCKET_VOICE_ENTRIES.filter(([slug]) => slug === nativeSlug),
+      ...POCKET_VOICE_ENTRIES.filter(([slug]) => slug !== nativeSlug),
+    ];
+    for (const [slug, name, gender, age, description] of ordered) {
+      pocketVoices.push({
+        voice_id: `pocket:${lang}:${slug}`,
+        name,
+        language: lang,
+        locale: lang,
+        gender,
+        age,
+        description,
+        downloaded: slug === nativeSlug && lang === "fr",
+        engine: "pocket",
+        is_cloned: false,
+        is_native: slug === nativeSlug,
+      });
+    }
+  }
+
+  return [...enVoices, ...pocketVoices];
 }
 
 function escapeHtml(s: string): string {
@@ -232,6 +303,8 @@ export function installPreviewMock(): void {
 
   let settings: Settings = {
     theme: "dark",
+    ui_language: "en",
+    tts_language: "en",
     voice_id: "40QrMVgAxFiUnP9f", // Micah
     qwen_model_variant: "0.6b",
     speed: 1.1,
@@ -388,13 +461,31 @@ export function installPreviewMock(): void {
     };
   }
 
+  const readyModels = new Set<AppLanguage>(["en", "fr"]);
+
+  function buildLanguageModels(): LanguageModelStatus[] {
+    return SUPPORTED_LANGUAGES.map((meta) => ({
+      language: meta.code,
+      engine: meta.code === "en" ? "phonon" : "pocket",
+      model_id: meta.code === "en" ? "phonon-31m-en" : `pocket-tts-${meta.code}`,
+      ready: readyModels.has(meta.code),
+      loaded: settings.tts_language === meta.code && readyModels.has(meta.code),
+      estimated_size_mb: meta.sizeMb,
+      default_voice_id:
+        meta.code === "en"
+          ? "LMDIYE0Oa377Qh6Z"
+          : `pocket:${meta.code}:${POCKET_NATIVE_SLUG[meta.code]}`,
+    }));
+  }
+
   window.__BOOKREADER_MOCK__ = {
     async invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
       switch (cmd) {
         case "get_bootstrap": {
           const boot: AppBootstrap = {
-            model_ready: true,
+            model_ready: readyModels.size > 0,
             engine_loaded: true,
+            language_models: buildLanguageModels(),
             qwen_model_variant: "0.6b",
             qwen_model_ready: false,
             qwen_device_label: "Disabled",
@@ -439,14 +530,81 @@ export function installPreviewMock(): void {
           return settings as T;
         }
         case "select_voice": {
-          settings = { ...settings, voice_id: String(args.voiceId || settings.voice_id) };
+          const vid = String(args.voiceId || settings.voice_id);
+          const selected = voices.find((v) => v.voice_id === vid);
+          const nextLang =
+            selected &&
+            !selected.is_cloned &&
+            ["en", "fr", "de", "es", "pt", "it", "nl"].includes(selected.language)
+              ? (selected.language as AppLanguage)
+              : settings.tts_language;
+          voices = voices.map((v) => (v.voice_id === vid ? { ...v, downloaded: true } : v));
+          settings = { ...settings, voice_id: vid, tts_language: nextLang };
           return settings as T;
         }
         case "list_voices":
           return voices as T;
-        case "download_all_voices":
-          voices = voices.map((v) => ({ ...v, downloaded: true }));
+        case "download_model": {
+          const lang = (args.language as AppLanguage | undefined) ?? settings.tts_language;
+          readyModels.add(lang);
+          return undefined as T;
+        }
+        case "download_language_model": {
+          const lang = String(args.language || "en") as AppLanguage;
+          const modelId = lang === "en" ? "phonon-31m-en" : `pocket-tts-${lang}`;
+          emit("download:progress", {
+            kind: "model",
+            item_id: modelId,
+            current_file: "model.safetensors",
+            bytes_done: 50,
+            bytes_total: 100,
+            files_done: 0,
+            files_total: 2,
+            done: false,
+            error: null,
+          });
+          await new Promise((r) => window.setTimeout(r, 220));
+          readyModels.add(lang);
+          const defVoice =
+            lang === "en"
+              ? "LMDIYE0Oa377Qh6Z"
+              : `pocket:${lang}:${POCKET_NATIVE_SLUG[lang]}`;
+          voices = voices.map((v) => (v.voice_id === defVoice ? { ...v, downloaded: true } : v));
+          emit("download:progress", {
+            kind: "model",
+            item_id: modelId,
+            current_file: "Complete",
+            bytes_done: 100,
+            bytes_total: 100,
+            files_done: 2,
+            files_total: 2,
+            done: true,
+            error: null,
+          });
+          return buildLanguageModels() as T;
+        }
+        case "set_tts_language": {
+          const lang = String(args.language || "en") as AppLanguage;
+          if (!readyModels.has(lang)) {
+            throw new Error(`TTS model for ${lang} is not downloaded yet`);
+          }
+          const defVoice =
+            lang === "en"
+              ? "LMDIYE0Oa377Qh6Z"
+              : `pocket:${lang}:${POCKET_NATIVE_SLUG[lang]}`;
+          settings = { ...settings, tts_language: lang, voice_id: defVoice };
+          const res: SetTtsLanguageResponse = {
+            settings,
+            voices,
+            language_models: buildLanguageModels(),
+          };
+          return res as T;
+        }
+        case "download_all_voices": {
+          const lang = (args.language as AppLanguage | undefined) ?? settings.tts_language;
+          voices = voices.map((v) => (v.language === lang ? { ...v, downloaded: true } : v));
           return voices as T;
+        }
         case "tts_toggle_play_pause":
           playing = !playing;
           if (playing) startSim();
