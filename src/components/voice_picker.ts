@@ -9,7 +9,7 @@ import {
   tVoiceGender,
 } from "../i18n";
 import { Icons } from "../icons";
-import { isAndroidPlatform, isVoiceCloningEnabled, state } from "../state";
+import { isAndroidPlatform, isVoiceCloningEnabled, state, syncServerSettings } from "../state";
 import { invoke } from "../tauri_bridge";
 import type {
   DeleteClonedVoiceResponse,
@@ -34,6 +34,7 @@ let activeFilter: EnFilter | PocketFilter = "all";
 let lastSeenTtsLang: AppLanguage | null = null;
 let downloadingVoiceId: string | null = null;
 let switchingModel = false;
+let voiceActionSeq = 0;
 
 function rerenderIfOpen(container: HTMLElement, handlers: VoicePickerHandlers): void {
   if (state.activeModal === "voices") {
@@ -246,12 +247,14 @@ export function renderVoicePickerModal(
 
   container.querySelector<HTMLSelectElement>("#vp-lang-switch")?.addEventListener("change", async (e) => {
     const nextLang = (e.target as HTMLSelectElement).value as AppLanguage;
-    if (nextLang === activeTtsLang || switchingModel) return;
+    if (nextLang === activeTtsLang || switchingModel || downloadingVoiceId !== null) return;
+    const seq = ++voiceActionSeq;
     switchingModel = true;
     rerenderIfOpen(container, handlers);
     try {
       const res = await invoke<SetTtsLanguageResponse>("set_tts_language", { language: nextLang });
-      state.settings = res.settings;
+      if (seq !== voiceActionSeq) return;
+      syncServerSettings(res.settings);
       state.voices = res.voices;
       if (state.bootstrap) {
         state.bootstrap.language_models = res.language_models;
@@ -280,12 +283,16 @@ export function renderVoicePickerModal(
   });
 
   container.querySelector("#btn-download-all-voices")?.addEventListener("click", async () => {
+    if (downloadingVoiceId !== null || switchingModel) return;
+    const seq = ++voiceActionSeq;
     try {
       downloadingVoiceId = "__all__";
       rerenderIfOpen(container, handlers);
-      state.voices = await invoke<VoiceInfo[]>("download_all_voices", {
+      const voices = await invoke<VoiceInfo[]>("download_all_voices", {
         language: activeTtsLang,
       });
+      if (seq !== voiceActionSeq) return;
+      state.voices = voices;
       downloadingVoiceId = null;
       handlers.onChanged();
       rerenderIfOpen(container, handlers);
@@ -303,12 +310,16 @@ export function renderVoicePickerModal(
   });
 
   container.querySelectorAll<HTMLElement>("[data-select-voice]").forEach((card) => {
-    card.addEventListener("click", async () => {
+    const activateCard = async () => {
+      if (downloadingVoiceId !== null || switchingModel) return;
       const vid = card.dataset.selectVoice!;
+      const seq = ++voiceActionSeq;
       try {
         downloadingVoiceId = vid;
         rerenderIfOpen(container, handlers);
-        state.settings = await invoke<Settings>("select_voice", { voiceId: vid });
+        const saved = await invoke<Settings>("select_voice", { voiceId: vid });
+        if (seq !== voiceActionSeq) return;
+        syncServerSettings(saved);
         state.voices = await invoke<VoiceInfo[]>("list_voices");
         downloadingVoiceId = null;
         handlers.onChanged();
@@ -318,12 +329,22 @@ export function renderVoicePickerModal(
         handlers.onToast(tr("voices_toast_voice_err", { error: String(err) }));
         rerenderIfOpen(container, handlers);
       }
+    };
+    card.addEventListener("click", () => {
+      void activateCard();
+    });
+    card.addEventListener("keydown", (e) => {
+      if (e.target === card && (e.key === "Enter" || e.key === " ")) {
+        e.preventDefault();
+        void activateCard();
+      }
     });
   });
 
   container.querySelectorAll<HTMLButtonElement>("[data-preview-voice]").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (downloadingVoiceId !== null || switchingModel) return;
       const vid = btn.dataset.previewVoice!;
       const voice = state.voices.find((v) => v.voice_id === vid);
       const previewLang: AppLanguage =
@@ -347,15 +368,18 @@ export function renderVoicePickerModal(
   container.querySelectorAll<HTMLButtonElement>("[data-delete-voice]").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (downloadingVoiceId !== null || switchingModel) return;
       const vid = btn.dataset.deleteVoice!;
+      const seq = ++voiceActionSeq;
       try {
         downloadingVoiceId = vid;
         rerenderIfOpen(container, handlers);
         const res = await invoke<DeleteClonedVoiceResponse>("delete_cloned_voice", {
           voiceId: vid,
         });
+        if (seq !== voiceActionSeq) return;
         state.voices = res.voices;
-        state.settings = res.settings;
+        syncServerSettings(res.settings);
         downloadingVoiceId = null;
         handlers.onChanged();
         handlers.onToast(tr("voices_toast_clone_deleted"));
@@ -385,6 +409,7 @@ function renderEmptyClonedSection(label: string): string {
 
 function renderVoiceCard(v: VoiceInfo, uiLang: AppLanguage): string {
   const isActive = state.settings.voice_id === v.voice_id;
+  const modalBusy = downloadingVoiceId !== null || switchingModel;
   const isBusy =
     downloadingVoiceId === v.voice_id ||
     (downloadingVoiceId === "__all__" && !v.is_cloned && !v.downloaded);
@@ -401,7 +426,7 @@ function renderVoiceCard(v: VoiceInfo, uiLang: AppLanguage): string {
   const desc = v.is_cloned ? v.description : tVoiceDesc(uiLang, v.voice_id, v.description);
 
   return `
-    <div class="voice-card ${isActive ? "active" : ""}" role="button" tabindex="0" data-select-voice="${escapeAttr(v.voice_id)}">
+    <div class="voice-card ${isActive ? "active" : ""}" role="button" tabindex="0" aria-disabled="${modalBusy ? "true" : "false"}" data-select-voice="${escapeAttr(v.voice_id)}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
         <div style="display:flex;align-items:center;gap:5px;min-width:0;">
           <strong style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(v.name)}</strong>
@@ -409,10 +434,10 @@ function renderVoiceCard(v: VoiceInfo, uiLang: AppLanguage): string {
         </div>
         <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
           <span class="flag-tag">${escapeHtml(statusLabel)}</span>
-          <button class="icon-btn" style="width:24px;height:24px;" data-preview-voice="${escapeAttr(v.voice_id)}" title="${escapeAttr(tr("voices_preview_tooltip"))}">${Icons.play(11)}</button>
+          <button class="icon-btn" style="width:24px;height:24px;" data-preview-voice="${escapeAttr(v.voice_id)}" ${modalBusy ? "disabled" : ""} title="${escapeAttr(tr("voices_preview_tooltip"))}">${Icons.play(11)}</button>
           ${
             v.is_cloned
-              ? `<button class="icon-btn" style="width:24px;height:24px;" data-delete-voice="${escapeAttr(v.voice_id)}" title="${escapeAttr(tr("voices_delete_tooltip"))}">${Icons.trash()}</button>`
+              ? `<button class="icon-btn" style="width:24px;height:24px;" data-delete-voice="${escapeAttr(v.voice_id)}" ${modalBusy ? "disabled" : ""} title="${escapeAttr(tr("voices_delete_tooltip"))}">${Icons.trash()}</button>`
               : ""
           }
         </div>

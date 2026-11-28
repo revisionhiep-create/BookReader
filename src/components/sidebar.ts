@@ -34,7 +34,7 @@ export function renderSidebar(container: HTMLElement, handlers: SidebarHandlers)
   container.innerHTML = `
     <div class="sidebar-header">
       <div class="brand-mark">
-        ${Icons.brandLogo(19)}
+        ${Icons.brandLogo(26)}
         <span>${escapeHtml(tr("app_title"))}</span>
       </div>
       <button class="icon-btn" id="btn-sidebar-collapse" title="${escapeAttr(tr("sidebar_collapse"))}">

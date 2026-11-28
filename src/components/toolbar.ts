@@ -177,6 +177,7 @@ export function initToolbar(container: HTMLElement, handlers: ToolbarHandlers): 
   container.querySelector("#progress-seek-track")?.addEventListener("click", (e) => {
     if (state.sentences.length === 0) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    if (rect.width <= 0) return;
     const frac = Math.max(0, Math.min(1, ((e as MouseEvent).clientX - rect.left) / rect.width));
     const idx = Math.floor(frac * (state.sentences.length - 1));
     handlers.onSeekSentence(idx);
@@ -399,13 +400,17 @@ function renderPopoverOnly(): void {
   pop.querySelectorAll<HTMLButtonElement>("[data-sleep-min]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const mins = parseInt(btn.dataset.sleepMin || "15", 10);
-      state.sleepTimer = await invoke<SleepTimerStatus>("set_sleep_timer", {
-        mode: "minutes",
-        minutes: mins,
-        endSentenceIdx: null,
-      });
-      closeToolbarPopovers();
-      syncToolbar();
+      try {
+        state.sleepTimer = await invoke<SleepTimerStatus>("set_sleep_timer", {
+          mode: "minutes",
+          minutes: mins,
+          endSentenceIdx: null,
+        });
+        closeToolbarPopovers();
+        syncToolbar();
+      } catch (err) {
+        console.warn("set_sleep_timer failed", err);
+      }
     });
   });
 
@@ -413,22 +418,30 @@ function renderPopoverOnly(): void {
     const cur = state.tts.sentence_idx;
     const nextChap = state.toc.find((t) => t.sentence_idx > cur);
     const endSentenceIdx = nextChap ? nextChap.sentence_idx : Math.max(0, state.sentences.length - 1);
-    state.sleepTimer = await invoke<SleepTimerStatus>("set_sleep_timer", {
-      mode: "end_of_chapter",
-      minutes: null,
-      endSentenceIdx,
-    });
-    closeToolbarPopovers();
-    syncToolbar();
+    try {
+      state.sleepTimer = await invoke<SleepTimerStatus>("set_sleep_timer", {
+        mode: "end_of_chapter",
+        minutes: null,
+        endSentenceIdx,
+      });
+      closeToolbarPopovers();
+      syncToolbar();
+    } catch (err) {
+      console.warn("set_sleep_timer failed", err);
+    }
   });
 
   pop.querySelector("[data-sleep-off]")?.addEventListener("click", async () => {
-    state.sleepTimer = await invoke<SleepTimerStatus>("set_sleep_timer", {
-      mode: "off",
-      minutes: null,
-      endSentenceIdx: null,
-    });
-    closeToolbarPopovers();
-    syncToolbar();
+    try {
+      state.sleepTimer = await invoke<SleepTimerStatus>("set_sleep_timer", {
+        mode: "off",
+        minutes: null,
+        endSentenceIdx: null,
+      });
+      closeToolbarPopovers();
+      syncToolbar();
+    } catch (err) {
+      console.warn("set_sleep_timer failed", err);
+    }
   });
 }

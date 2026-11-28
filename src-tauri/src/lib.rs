@@ -84,6 +84,7 @@ pub fn run() {
                 Arc::clone(tts.engine()),
             ));
             let media_keys = Arc::new(MediaKeysBridge::init(&handle, Arc::clone(&tts)));
+            tts.attach_media_keys(Arc::clone(&media_keys));
             let sleep_timer = SleepTimer::start(handle.clone(), Arc::clone(&storage), Arc::clone(&tts));
 
             #[cfg(not(target_os = "android"))]
@@ -132,6 +133,8 @@ pub fn run() {
             commands::add_bookmark,
             commands::remove_bookmark,
             commands::delete_book,
+            commands::delete_books,
+            commands::clear_library,
             commands::tts_play_from,
             commands::tts_toggle_play_pause,
             commands::tts_pause,

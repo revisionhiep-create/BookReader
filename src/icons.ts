@@ -1,4 +1,6 @@
-//! Neutral monochrome SVG icon library for BookReader.
+//! Icon library for BookReader.
+
+import appIconUrl from "./assets/app-icon.png";
 
 function svg(body: string, size = 18): string {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -6,13 +8,7 @@ function svg(body: string, size = 18): string {
 
 export const Icons = {
   brandLogo: (size = 20) =>
-    `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M8.5 5.2a5 5 0 0 1 7 0"/>
-      <path d="M6.2 3a8.2 8.2 0 0 1 11.6 0"/>
-      <path d="M12 11.5v8.5"/>
-      <path d="M12 11.5c-2.5-1.3-5.8-1.3-8-.3v8.6c2.2-1 5.5-1 8 .2"/>
-      <path d="M12 11.5c2.5-1.3 5.8-1.3 8-.3v8.6c-2.2-1-5.5-1-8 .2"/>
-    </svg>`,
+    `<img class="brand-logo-img" src="${appIconUrl}" width="${size}" height="${size}" alt="" aria-hidden="true" draggable="false" />`,
 
   sidebarToggle: () =>
     svg(`<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/>`),

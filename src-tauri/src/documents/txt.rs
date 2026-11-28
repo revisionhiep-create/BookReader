@@ -6,7 +6,10 @@ use std::path::Path;
 
 pub fn parse_txt(path: &Path, mut book: BookMeta) -> Result<DocumentPayload, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Failed reading TXT: {e}"))?;
-    let raw = String::from_utf8_lossy(&bytes).replace("\r\n", "\n").replace('\r', "\n");
+    let raw = String::from_utf8_lossy(&bytes)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let raw = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
 
     let mut sentences: Vec<SentenceItem> = Vec::new();
     let mut toc: Vec<TocEntry> = Vec::new();
@@ -14,13 +17,24 @@ pub fn parse_txt(path: &Path, mut book: BookMeta) -> Result<DocumentPayload, Str
     let mut paragraph_idx = 0usize;
     let mut current_chapter_idx: Option<usize> = None;
 
-    for block in raw.split("\n\n") {
-        let cleaned = block
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
+    let mut blocks: Vec<String> = Vec::new();
+    let mut current_lines: Vec<&str> = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !current_lines.is_empty() {
+                blocks.push(current_lines.join(" "));
+                current_lines.clear();
+            }
+        } else {
+            current_lines.push(trimmed);
+        }
+    }
+    if !current_lines.is_empty() {
+        blocks.push(current_lines.join(" "));
+    }
+
+    for cleaned in blocks {
         if cleaned.is_empty() {
             continue;
         }

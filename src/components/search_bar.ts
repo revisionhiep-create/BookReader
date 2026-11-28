@@ -1,6 +1,7 @@
 import { tr } from "../i18n";
 import { Icons } from "../icons";
 import { state } from "../state";
+import { escapeAttr } from "./sidebar";
 
 export interface SearchHandlers {
   onJumpToSentence: (sentenceIdx: number) => void;
@@ -16,6 +17,30 @@ export function renderSearchBar(container: HTMLElement, handlers: SearchHandlers
 
   container.style.display = "flex";
   container.className = "search-bar";
+
+  const recomputeHits = (query: string) => {
+    state.searchQuery = query;
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      state.searchHits = [];
+      state.searchCursor = 0;
+    } else {
+      const hits: number[] = [];
+      for (let i = 0; i < state.sentences.length; i++) {
+        if (state.sentences[i].text.toLowerCase().includes(q)) {
+          hits.push(i);
+        }
+      }
+      state.searchHits = hits;
+      if (state.searchCursor >= hits.length) {
+        state.searchCursor = 0;
+      }
+    }
+  };
+
+  if (state.searchQuery.trim().length > 0 && state.searchHits.length === 0) {
+    recomputeHits(state.searchQuery);
+  }
 
   const countText =
     state.searchQuery.trim().length === 0
@@ -37,21 +62,8 @@ export function renderSearchBar(container: HTMLElement, handlers: SearchHandlers
   input.setSelectionRange(input.value.length, input.value.length);
 
   const runSearch = (query: string) => {
-    state.searchQuery = query;
-    const q = query.trim().toLowerCase();
-    if (!q) {
-      state.searchHits = [];
-      state.searchCursor = 0;
-    } else {
-      const hits: number[] = [];
-      for (let i = 0; i < state.sentences.length; i++) {
-        if (state.sentences[i].text.toLowerCase().includes(q)) {
-          hits.push(i);
-        }
-      }
-      state.searchHits = hits;
-      state.searchCursor = 0;
-    }
+    state.searchCursor = 0;
+    recomputeHits(query);
     updateCountLabel(container);
     if (state.searchHits.length > 0) {
       handlers.onJumpToSentence(state.searchHits[0]);
@@ -99,8 +111,4 @@ function updateCountLabel(container: HTMLElement): void {
   const next = container.querySelector<HTMLButtonElement>("#btn-search-next");
   if (prev) prev.disabled = state.searchHits.length === 0;
   if (next) next.disabled = state.searchHits.length === 0;
-}
-
-function escapeAttr(s: string): string {
-  return s.replace(/"/g, "&quot;");
 }

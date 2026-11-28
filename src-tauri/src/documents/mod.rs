@@ -30,7 +30,20 @@ pub fn media_base_url() -> &'static str {
 /// Generates a WebView-compatible custom protocol URL for book files and embedded images.
 pub fn media_url(kind: &str, book_id: &str, rel_path: &str) -> String {
     let clean = rel_path.trim_start_matches('/');
-    format!("{}/{kind}/{book_id}/{clean}", media_base_url())
+    let encoded = percent_encode_path(clean);
+    format!("{}/{kind}/{book_id}/{encoded}", media_base_url())
+}
+
+fn percent_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for &b in path.as_bytes() {
+        if b == b'/' || b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 fn register_imported_book<F>(original_filename: &str, write_dest: F, storage: &Storage) -> Result<BookMeta, String>
@@ -44,7 +57,7 @@ where
     let format = BookFormat::from_extension(ext)
         .ok_or_else(|| format!("Unsupported format '.{ext}'. Supported: PDF, EPUB, DOCX, TXT"))?;
 
-    let title = Path::new(original_filename)
+    let fallback_title = Path::new(original_filename)
         .file_stem()
         .and_then(|n| n.to_str())
         .filter(|s| !s.is_empty())
@@ -60,7 +73,11 @@ where
     let now = now_unix_secs();
     let mut book = BookMeta {
         id,
-        title,
+        title: if format == BookFormat::Pdf {
+            fallback_title.clone()
+        } else {
+            String::new()
+        },
         format,
         stored_filename,
         original_filename: original_filename.to_string(),
@@ -81,6 +98,9 @@ where
         && let Ok(parsed) = load_non_pdf_document(&dest, book.clone())
     {
         book = parsed.book;
+    }
+    if book.title.trim().is_empty() {
+        book.title = fallback_title;
     }
 
     storage.upsert_book(book)
@@ -242,6 +262,7 @@ fn serve_file_with_ranges(path: &Path, request: &Request<Vec<u8>>) -> Response<V
 }
 
 fn serve_zip_entry(zip_path: &Path, entry_path: &str) -> Response<Vec<u8>> {
+    const MAX_ZIP_MEDIA_BYTES: usize = 64 * 1024 * 1024;
     let Ok(file) = File::open(zip_path) else {
         return error_response(StatusCode::NOT_FOUND, "Archive missing");
     };
@@ -249,12 +270,19 @@ fn serve_zip_entry(zip_path: &Path, entry_path: &str) -> Response<Vec<u8>> {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Invalid archive");
     };
     let decoded = percent_decode_path(entry_path);
-    let Ok(mut entry) = archive.by_name(&decoded) else {
+    let Ok(entry) = archive.by_name(&decoded) else {
         return error_response(StatusCode::NOT_FOUND, "Embedded image not found");
     };
     let mut buf = Vec::new();
-    if entry.read_to_end(&mut buf).is_err() {
+    if entry
+        .take((MAX_ZIP_MEDIA_BYTES + 1) as u64)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed reading image");
+    }
+    if buf.len() > MAX_ZIP_MEDIA_BYTES {
+        return error_response(StatusCode::PAYLOAD_TOO_LARGE, "Embedded asset too large");
     }
     Response::builder()
         .status(StatusCode::OK)

@@ -15,7 +15,9 @@ if [[ ! -d "$GEN_ANDROID" ]]; then
   echo "==> Initializing Tauri Android project"
   npx tauri android init --ci --skip-targets-install --config android/tauri.android.conf.json
 fi
-if [[ -f "$REPO_ROOT/src-tauri/icons/icon.png" ]]; then
+if [[ -f "$REPO_ROOT/src-tauri/icons/icon-manifest.json" ]]; then
+  npx tauri icon src-tauri/icons/icon-manifest.json
+elif [[ -f "$REPO_ROOT/src-tauri/icons/icon.png" ]]; then
   npx tauri icon src-tauri/icons/icon.png --fit contain
 fi
 grep -n "minSdk" "$GEN_ANDROID/app/build.gradle.kts" || true
@@ -149,31 +151,45 @@ sign_if_needed() {
   fi
 
   local ks=""
+  local ks_pass=""
+  local key_alias=""
+  local key_pass=""
   if [[ -n "${ANDROID_KEYSTORE_PATH:-}" ]]; then
     ks="$ANDROID_KEYSTORE_PATH"
     if [[ ! -f "$ks" ]]; then
       echo "ERROR: Explicit ANDROID_KEYSTORE_PATH not found: $ks" >&2
       exit 1
     fi
+    if [[ -z "${ANDROID_KEYSTORE_PASS:-}" || -z "${ANDROID_KEY_ALIAS:-}" || -z "${ANDROID_KEY_PASS:-}" ]]; then
+      echo "ERROR: ANDROID_KEYSTORE_PASS, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASS must be set when ANDROID_KEYSTORE_PATH is provided" >&2
+      exit 1
+    fi
+    ks_pass="$ANDROID_KEYSTORE_PASS"
+    key_alias="$ANDROID_KEY_ALIAS"
+    key_pass="$ANDROID_KEY_PASS"
   else
     ks="$HOME/.android/debug.keystore"
+    ks_pass="${ANDROID_KEYSTORE_PASS:-android}"
+    key_alias="${ANDROID_KEY_ALIAS:-androiddebugkey}"
+    key_pass="${ANDROID_KEY_PASS:-android}"
   fi
-  local ks_pass="${ANDROID_KEYSTORE_PASS:-android}"
-  local key_alias="${ANDROID_KEY_ALIAS:-androiddebugkey}"
-  local key_pass="${ANDROID_KEY_PASS:-android}"
+
+  export APKSIGNER_KS_PASS="$ks_pass"
+  export APKSIGNER_KEY_PASS="$key_pass"
+  trap 'unset APKSIGNER_KS_PASS APKSIGNER_KEY_PASS' RETURN
 
   if [[ ! -f "$ks" ]]; then
     mkdir -p "$(dirname "$ks")"
-    keytool -genkey -v -keystore "$ks" -storepass "$ks_pass" -alias "$key_alias" \
-      -keypass "$key_pass" -keyalg RSA -keysize 2048 -validity 10000 \
+    keytool -genkey -v -keystore "$ks" -storepass:env APKSIGNER_KS_PASS -alias "$key_alias" \
+      -keypass:env APKSIGNER_KEY_PASS -keyalg RSA -keysize 2048 -validity 10000 \
       -dname "CN=Android Debug,O=Android,C=US"
   fi
 
   "$apksigner" sign \
     --ks "$ks" \
-    --ks-pass "pass:$ks_pass" \
+    --ks-pass "env:APKSIGNER_KS_PASS" \
     --ks-key-alias "$key_alias" \
-    --key-pass "pass:$key_pass" \
+    --key-pass "env:APKSIGNER_KEY_PASS" \
     --out "$out_apk" \
     "$src_apk"
   "$apksigner" verify "$out_apk"
@@ -221,7 +237,9 @@ elif [[ "$MODE" == "x86_64" ]]; then
 fi
 
 if [[ -f "$DIST_DIR/BookReader-android-arm64.apk" ]]; then
-  unzip -l "$DIST_DIR/BookReader-android-arm64.apk" | grep "assets/adi-registration.properties"
+  if ! unzip -l "$DIST_DIR/BookReader-android-arm64.apk" | grep -q "assets/adi-registration.properties"; then
+    echo "WARNING: assets/adi-registration.properties not found inside BookReader-android-arm64.apk" >&2
+  fi
 fi
 
 ls -lh "$DIST_DIR"

@@ -381,6 +381,19 @@ pub async fn delete_cloned_voice(
 
     state.tts.engine().qwen().evict_cached_voice(&voice_id);
 
+    let active_playing = state.storage.settings().voice_id == voice_id;
+    let remaining = state.storage.delete_cloned_voice(&voice_id)?;
+    let mut settings = state.storage.settings();
+    if active_playing {
+        settings.voice_id =
+            pick_downloaded_fallback_voice_for_lang(state.storage.paths(), settings.tts_language);
+        settings = state.storage.save_settings(settings)?;
+        if !state.exporter.is_exporting_cloned_voice() {
+            state.tts.engine().unload_qwen();
+        }
+        state.tts.refresh_pipeline();
+    }
+
     let paths_for_fs = state.storage.paths().clone();
     let vid_for_fs = voice_id.clone();
     tokio::task::spawn_blocking(move || {
@@ -398,19 +411,6 @@ pub async fn delete_cloned_voice(
     })
     .await
     .map_err(|e| format!("Failed joining cloned voice cleanup task: {e}"))?;
-
-    let active_playing = state.storage.settings().voice_id == voice_id;
-    let remaining = state.storage.delete_cloned_voice(&voice_id)?;
-    let mut settings = state.storage.settings();
-    if active_playing {
-        settings.voice_id =
-            pick_downloaded_fallback_voice_for_lang(state.storage.paths(), settings.tts_language);
-        settings = state.storage.save_settings(settings)?;
-        if !state.exporter.is_exporting_cloned_voice() {
-            state.tts.engine().unload_qwen();
-        }
-        state.tts.refresh_pipeline();
-    }
 
     let voices = list_voices_with_status(state.storage.paths(), &remaining);
     Ok(DeleteClonedVoiceResponse { voices, settings })
@@ -471,8 +471,10 @@ pub async fn set_tts_language(
     }
 
     if language == AppLanguage::En {
-        state.tts.engine().unload_pocket();
-    } else {
+        if !state.exporter.is_exporting_pocket() {
+            state.tts.engine().unload_pocket();
+        }
+    } else if !state.exporter.is_exporting_phonon() {
         state.tts.engine().unload_phonon();
     }
 
@@ -592,26 +594,44 @@ pub async fn select_voice(
     if AppPaths::is_cloned_voice_id(&voice_id) {
         let variant = state.storage.settings().qwen_model_variant;
         validate_cloned_voice_ready(&state.storage, &voice_id, variant)?;
-    } else if voice_id != "default" && !state.storage.paths().is_voice_downloaded(&voice_id) {
-        state
-            .downloader
-            .download_voice(&app, state.storage.paths(), &voice_id)
-            .await?;
+    } else if let Some((voice_lang, _)) = AppPaths::parse_pocket_voice_id(&voice_id) {
+        if !state.storage.paths().language_model_ready(voice_lang) {
+            return Err(format!(
+                "Pocket TTS ({}) model files are not downloaded yet",
+                voice_lang.code()
+            ));
+        }
+        if !state.storage.paths().is_voice_downloaded(&voice_id) {
+            state
+                .downloader
+                .download_voice(&app, state.storage.paths(), &voice_id)
+                .await?;
+        }
+    } else {
+        if !state.storage.paths().model_ready() {
+            return Err("Phonon 31M model files are not downloaded yet".to_string());
+        }
+        if voice_id != "default" && !state.storage.paths().is_voice_downloaded(&voice_id) {
+            state
+                .downloader
+                .download_voice(&app, state.storage.paths(), &voice_id)
+                .await?;
+        }
     }
 
     let mut settings = state.storage.settings();
     settings.voice_id = voice_id.clone();
 
     if let Some((voice_lang, _)) = AppPaths::parse_pocket_voice_id(&voice_id) {
-        if state.storage.paths().language_model_ready(voice_lang) {
-            settings.tts_language = voice_lang;
+        settings.tts_language = voice_lang;
+        if !state.exporter.is_exporting_phonon() {
             state.tts.engine().unload_phonon();
         }
-    } else if !AppPaths::is_cloned_voice_id(&voice_id)
-        && state.storage.paths().language_model_ready(AppLanguage::En)
-    {
+    } else if !AppPaths::is_cloned_voice_id(&voice_id) {
         settings.tts_language = AppLanguage::En;
-        state.tts.engine().unload_pocket();
+        if !state.exporter.is_exporting_pocket() {
+            state.tts.engine().unload_pocket();
+        }
     }
 
     let saved = state.storage.save_settings(settings)?;
@@ -808,6 +828,9 @@ pub fn set_pdf_sentences(
     cursor_idx: usize,
     preserving: bool,
 ) -> Result<BookMeta, String> {
+    if state.storage.get_book(&book_id).is_none() {
+        return Err(format!("Book not found: {book_id}"));
+    }
     let total_words: usize = sentences
         .iter()
         .map(|s| s.text.split_whitespace().count())
@@ -892,6 +915,56 @@ pub fn delete_book(state: State<'_, AppState>, book_id: String) -> Result<Vec<Bo
         && let Ok(p) = state.storage.paths().book_path(&filename)
     {
         let _ = std::fs::remove_file(p);
+    }
+    Ok(state.storage.library())
+}
+
+#[tauri::command]
+pub fn delete_books(
+    state: State<'_, AppState>,
+    book_ids: Vec<String>,
+) -> Result<Vec<BookMeta>, String> {
+    if let Some(active_id) = state.tts.current_state_event().book_id.as_deref()
+        && book_ids.iter().any(|id| id == active_id)
+    {
+        state.tts.stop();
+    }
+    for filename in state.storage.delete_books(&book_ids)? {
+        if let Ok(p) = state.storage.paths().book_path(&filename) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    Ok(state.storage.library())
+}
+
+#[tauri::command]
+pub fn clear_library(state: State<'_, AppState>) -> Result<Vec<BookMeta>, String> {
+    state.tts.stop();
+    for filename in state.storage.clear_library()? {
+        if let Ok(p) = state.storage.paths().book_path(&filename) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(&state.storage.paths().books_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    let import_tmp = state.storage.paths().data_dir.join("import_tmp");
+    if import_tmp.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&import_tmp)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let _ = std::fs::remove_dir_all(path);
+            } else if path.is_file() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
     }
     Ok(state.storage.library())
 }
@@ -1079,38 +1152,47 @@ pub fn open_folder_in_explorer(path: String) -> Result<(), String> {
     #[cfg(not(target_os = "android"))]
     {
         let p = PathBuf::from(&path);
+        if !p.exists() {
+            return Err(format!("Path does not exist: {path}"));
+        }
+        let canon = std::fs::canonicalize(&p)
+            .map_err(|e| format!("Failed resolving path {path}: {e}"))?;
+        let target_dir = if canon.is_file() {
+            canon
+                .parent()
+                .ok_or_else(|| format!("Path has no parent folder: {path}"))?
+                .to_path_buf()
+        } else if canon.is_dir() {
+            canon.clone()
+        } else {
+            return Err(format!("Unsupported path type: {path}"));
+        };
         #[cfg(target_os = "windows")]
         {
-            let dir = if p.is_file() {
-                p.parent().unwrap_or(&p).to_path_buf()
+            let mut cmd = std::process::Command::new("explorer");
+            if canon.is_file() {
+                cmd.arg(format!("/select,{}", canon.display()));
             } else {
-                p
-            };
-            std::process::Command::new("explorer")
-                .arg(dir)
-                .spawn()
+                cmd.arg(&target_dir);
+            }
+            cmd.spawn()
                 .map_err(|e| format!("Failed opening Explorer: {e}"))?;
         }
         #[cfg(target_os = "macos")]
         {
             let mut cmd = std::process::Command::new("open");
-            if p.is_file() {
-                cmd.arg("-R").arg(&p);
+            if canon.is_file() {
+                cmd.arg("-R").arg(&canon);
             } else {
-                cmd.arg(&p);
+                cmd.arg(&target_dir);
             }
             cmd.spawn()
                 .map_err(|e| format!("Failed opening Finder: {e}"))?;
         }
         #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
         {
-            let dir = if p.is_file() {
-                p.parent().unwrap_or(&p).to_path_buf()
-            } else {
-                p
-            };
             std::process::Command::new("xdg-open")
-                .arg(dir)
+                .arg(&target_dir)
                 .spawn()
                 .map_err(|e| format!("Failed opening file manager: {e}"))?;
         }

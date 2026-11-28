@@ -40,6 +40,9 @@ let mountedSheetLang: AppLanguage | null = null;
 let quickSheetStructureKey = "";
 let mountedDockMode: null | "collapsed" | "expanded" = null;
 let mountedDockLang: AppLanguage | null = null;
+let mountedTopbarLang: AppLanguage | null = null;
+let observedDockEl: HTMLElement | null = null;
+let resetDrawerLocalFn: (() => void) | null = null;
 let dockScrubbing = false;
 
 let lastDrawerOpenState = false;
@@ -154,6 +157,7 @@ function attachVerticalSwipeDismiss(opts: VerticalSwipeOptions): void {
   let snapBackTimer: number | null = null;
   let snapBackCard: HTMLElement | null = null;
   let snapBackBackdrop: HTMLElement | null = null;
+  let cleanupWindowMouse: (() => void) | null = null;
 
   const clearSnapBackTimer = () => {
     if (snapBackTimer !== null) {
@@ -173,6 +177,8 @@ function attachVerticalSwipeDismiss(opts: VerticalSwipeOptions): void {
   };
 
   const resetTracking = () => {
+    cleanupWindowMouse?.();
+    cleanupWindowMouse = null;
     tracking = false;
     dragging = false;
     mode = null;
@@ -339,8 +345,13 @@ function attachVerticalSwipeDismiss(opts: VerticalSwipeOptions): void {
     }
 
     const now = performance.now();
-    const dt = Math.max(16, (lastTs > prevTs ? lastTs : now) - prevTs);
-    const vel = (lastY - prevY) / dt;
+    const idleMs = now - lastTs;
+    const vel =
+      idleMs > 100
+        ? 0
+        : lastTs > prevTs
+          ? (lastY - prevY) / Math.max(16, lastTs - prevTs)
+          : dy / Math.max(16, now - prevTs);
     const threshold = Math.min(
       maxThresholdPx,
       Math.max(minThresholdPx, (card.offsetHeight || 360) * heightFrac),
@@ -428,6 +439,14 @@ function attachVerticalSwipeDismiss(opts: VerticalSwipeOptions): void {
     if (mode === "touch") finishDrag(true);
   });
 
+  const endMouse = (e: PointerEvent) => {
+    if (mode !== "mouse" || e.pointerId !== pointerId) return;
+    finishDrag(e.type === "pointercancel");
+  };
+  const cancelMouseBlur = () => {
+    if (mode === "mouse") finishDrag(true);
+  };
+
   gestureRoot.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "touch" || e.button !== 0 || mode !== null) return;
     const targets = resolveTargets();
@@ -436,6 +455,14 @@ function attachVerticalSwipeDismiss(opts: VerticalSwipeOptions): void {
     if (!startZone) return;
     mode = "mouse";
     pointerId = e.pointerId;
+    window.addEventListener("pointerup", endMouse);
+    window.addEventListener("pointercancel", endMouse);
+    window.addEventListener("blur", cancelMouseBlur);
+    cleanupWindowMouse = () => {
+      window.removeEventListener("pointerup", endMouse);
+      window.removeEventListener("pointercancel", endMouse);
+      window.removeEventListener("blur", cancelMouseBlur);
+    };
     const immediate = startZone === "immediate";
     beginDrag(e.clientX, e.clientY, immediate, e.target, targets.card, targets.backdrop);
     if (immediate) {
@@ -448,13 +475,13 @@ function attachVerticalSwipeDismiss(opts: VerticalSwipeOptions): void {
 
   gestureRoot.addEventListener("pointermove", (e) => {
     if (mode !== "mouse" || e.pointerId !== pointerId) return;
+    if ((e.buttons & 1) === 0) {
+      finishDrag(true);
+      return;
+    }
     updateDrag(e.clientX, e.clientY);
   });
 
-  const endMouse = (e: PointerEvent) => {
-    if (mode !== "mouse" || e.pointerId !== pointerId) return;
-    finishDrag(e.type === "pointercancel");
-  };
   gestureRoot.addEventListener("pointerup", endMouse);
   gestureRoot.addEventListener("pointercancel", endMouse);
 }
@@ -509,6 +536,7 @@ function resetDrawerGestureState(sidebarEl: HTMLElement, backdropEl: HTMLElement
     window.clearTimeout(drawerSnapTimer);
     drawerSnapTimer = null;
   }
+  resetDrawerLocalFn?.();
   drawerDragMode = null;
   setSwipeDismissActive(false);
   sidebarEl.style.transition = "";
@@ -534,6 +562,7 @@ function attachDrawerSwipeToDismiss(
   let lastTs = 0;
   let pointerId = -1;
   let captureEl: HTMLElement | null = null;
+  let cleanupWindowMouse: (() => void) | null = null;
 
   const clearSnapTimer = () => {
     if (drawerSnapTimer !== null) {
@@ -547,6 +576,8 @@ function attachDrawerSwipeToDismiss(
   };
 
   const resetLocalTracking = () => {
+    cleanupWindowMouse?.();
+    cleanupWindowMouse = null;
     tracking = false;
     dragging = false;
     drawerDragMode = null;
@@ -554,6 +585,7 @@ function attachDrawerSwipeToDismiss(
     captureEl = null;
     setSwipeDismissActive(false);
   };
+  resetDrawerLocalFn = resetLocalTracking;
 
   const applyDrawerTransform = (dx: number) => {
     const width = Math.max(180, sidebarEl.offsetWidth || 260);
@@ -664,8 +696,13 @@ function attachDrawerSwipeToDismiss(
 
     const width = Math.max(180, sidebarEl.offsetWidth || 260);
     const now = performance.now();
-    const dt = Math.max(16, (lastTs > prevTs ? lastTs : now) - prevTs);
-    const velX = (lastX - prevX) / dt;
+    const idleMs = now - lastTs;
+    const velX =
+      idleMs > 100
+        ? 0
+        : lastTs > prevTs
+          ? (lastX - prevX) / Math.max(16, lastTs - prevTs)
+          : dx / Math.max(16, now - prevTs);
     const threshold = Math.min(100, Math.max(56, width * 0.28));
 
     if (!cancelled && (-dx > threshold || (-dx > 24 && velX < -0.45))) {
@@ -734,23 +771,39 @@ function attachDrawerSwipeToDismiss(
       if (drawerDragMode === "touch") finish(true);
     });
 
+    const endMouse = (e: PointerEvent) => {
+      if (drawerDragMode !== "mouse" || e.pointerId !== pointerId) return;
+      finish(e.type === "pointercancel");
+    };
+    const cancelDrawerMouseBlur = () => {
+      if (drawerDragMode === "mouse") finish(true);
+    };
+
     targetEl.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "touch" || e.button !== 0 || drawerDragMode !== null) return;
       if (!canStart(e.target)) return;
       drawerDragMode = "mouse";
       pointerId = e.pointerId;
+      window.addEventListener("pointerup", endMouse);
+      window.addEventListener("pointercancel", endMouse);
+      window.addEventListener("blur", cancelDrawerMouseBlur);
+      cleanupWindowMouse = () => {
+        window.removeEventListener("pointerup", endMouse);
+        window.removeEventListener("pointercancel", endMouse);
+        window.removeEventListener("blur", cancelDrawerMouseBlur);
+      };
       begin(e.clientX, e.clientY, targetEl);
     });
 
     targetEl.addEventListener("pointermove", (e) => {
       if (drawerDragMode !== "mouse" || e.pointerId !== pointerId) return;
+      if ((e.buttons & 1) === 0) {
+        finish(true);
+        return;
+      }
       update(e.clientX, e.clientY);
     });
 
-    const endMouse = (e: PointerEvent) => {
-      if (drawerDragMode !== "mouse" || e.pointerId !== pointerId) return;
-      finish(e.type === "pointercancel");
-    };
     targetEl.addEventListener("pointerup", endMouse);
     targetEl.addEventListener("pointercancel", endMouse);
   }
@@ -843,7 +896,29 @@ export function syncMobileChrome(): void {
 function renderMobileTopbar(container: HTMLElement, handlers: MobileChromeHandlers): void {
   const hasBook = state.activeBook !== null;
   const title = state.activeBook ? state.activeBook.title : tr("app_title");
+  const uiLang = getActiveUiLanguage();
 
+  if (
+    mountedTopbarLang === uiLang &&
+    container.querySelector(".mobile-topbar")
+  ) {
+    const titleBtn = container.querySelector<HTMLButtonElement>("#m-btn-title");
+    const titleText = container.querySelector<HTMLElement>(".mobile-book-title-text");
+    const searchBtn = container.querySelector<HTMLButtonElement>("#m-btn-search");
+    const quickBtn = container.querySelector<HTMLButtonElement>("#m-btn-quick-reader");
+    if (titleBtn) titleBtn.title = title;
+    if (titleText) titleText.textContent = title;
+    if (searchBtn) {
+      searchBtn.disabled = !hasBook;
+      searchBtn.classList.toggle("active", state.searchOpen);
+    }
+    if (quickBtn) {
+      quickBtn.classList.toggle("active", state.quickReaderSheetOpen);
+    }
+    return;
+  }
+
+  mountedTopbarLang = uiLang;
   container.innerHTML = `
     <div class="mobile-topbar">
       <button class="icon-btn" id="m-btn-drawer" aria-label="${escapeAttr(tr("mobile_open_menu"))}">${Icons.menu()}</button>
@@ -866,7 +941,7 @@ function renderMobileTopbar(container: HTMLElement, handlers: MobileChromeHandle
   });
 
   container.querySelector("#m-btn-title")?.addEventListener("click", () => {
-    handlers.onOpenModal(hasBook ? "toc" : "library");
+    handlers.onOpenModal(state.activeBook !== null ? "toc" : "library");
   });
 
   container.querySelector("#m-btn-search")?.addEventListener("click", handlers.onToggleSearch);
@@ -895,6 +970,10 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
         pillPlay.innerHTML = isPlaying ? Icons.pause(16) : Icons.play(16);
       }
       return;
+    }
+    if (observedDockEl && resizeObserver) {
+      resizeObserver.unobserve(observedDockEl);
+      observedDockEl = null;
     }
     mountedDockMode = "collapsed";
     mountedDockLang = uiLang;
@@ -961,6 +1040,10 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
   mountedDockMode = "expanded";
   mountedDockLang = uiLang;
   dockScrubbing = false;
+  if (observedDockEl && resizeObserver) {
+    resizeObserver.unobserve(observedDockEl);
+    observedDockEl = null;
+  }
   container.innerHTML = `
     <div class="mobile-player-dock">
       <div class="mobile-scrub-hit" id="m-progress-track" title="${escapeAttr(tr("mobile_seek_position"))}">
@@ -999,8 +1082,15 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
     </div>
   `;
 
+  const dockEl = container.querySelector<HTMLElement>(".mobile-player-dock");
+  if (dockEl && resizeObserver) {
+    resizeObserver.observe(dockEl);
+    observedDockEl = dockEl;
+  }
+
   const scrubTrack = container.querySelector<HTMLElement>("#m-progress-track");
   if (scrubTrack) {
+    let scrubPointerId: number | null = null;
     const seekFromClientX = (clientX: number, commit: boolean) => {
       if (state.sentences.length === 0) return;
       const rect = scrubTrack.getBoundingClientRect();
@@ -1014,21 +1104,38 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
       }
     };
     scrubTrack.addEventListener("pointerdown", (e) => {
-      if (state.sentences.length === 0) return;
+      if (state.sentences.length === 0 || scrubPointerId !== null) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
       e.preventDefault();
+      scrubPointerId = e.pointerId;
       dockScrubbing = true;
-      scrubTrack.setPointerCapture(e.pointerId);
+      try {
+        scrubTrack.setPointerCapture(e.pointerId);
+      } catch {
+      }
       seekFromClientX(e.clientX, false);
     });
     scrubTrack.addEventListener("pointermove", (e) => {
-      if (!dockScrubbing) return;
+      if (!dockScrubbing || e.pointerId !== scrubPointerId) return;
       seekFromClientX(e.clientX, false);
     });
     const finishScrub = (e: PointerEvent) => {
-      if (!dockScrubbing) return;
+      if (!dockScrubbing || e.pointerId !== scrubPointerId) return;
       dockScrubbing = false;
-      if (scrubTrack.hasPointerCapture(e.pointerId)) {
-        scrubTrack.releasePointerCapture(e.pointerId);
+      scrubPointerId = null;
+      try {
+        if (scrubTrack.hasPointerCapture(e.pointerId)) {
+          scrubTrack.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+      }
+      if (e.type === "pointercancel") {
+        const fill = scrubTrack.querySelector<HTMLElement>(".progress-fill");
+        const curTotal = Math.max(1, state.sentences.length);
+        const idx = Math.min(state.tts.sentence_idx, curTotal - 1);
+        const pct = state.sentences.length > 0 ? ((idx + 1) / state.sentences.length) * 100 : 0;
+        if (fill) fill.style.width = `${pct.toFixed(2)}%`;
+        return;
       }
       seekFromClientX(e.clientX, true);
     };
@@ -1057,7 +1164,10 @@ function renderMobileDock(container: HTMLElement, handlers: MobileChromeHandlers
 
 function renderMobileSheet(container: HTMLElement, handlers: MobileChromeHandlers): void {
   if (state.activeModal !== null) {
-    if (container.innerHTML !== "") container.innerHTML = "";
+    if (container.innerHTML !== "") {
+      container.innerHTML = "";
+      setSwipeDismissActive(false);
+    }
     mountedSheet = null;
     return;
   }
@@ -1076,6 +1186,7 @@ function renderMobileSheet(container: HTMLElement, handlers: MobileChromeHandler
   }
   if (container.innerHTML !== "") {
     container.innerHTML = "";
+    setSwipeDismissActive(false);
   }
   mountedSheet = null;
 }
@@ -1156,6 +1267,8 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
     if (pdfInv) pdfInv.classList.toggle("active", s.pdf_invert_dark);
     const pdfMargins = container.querySelector<HTMLButtonElement>("#m-pdf-margins");
     if (pdfMargins) pdfMargins.classList.toggle("active", state.pdfMarginsEditing);
+    const bmBtn = container.querySelector<HTMLButtonElement>("#m-add-bookmark");
+    if (bmBtn) bmBtn.disabled = !hasBook;
     return;
   }
 
@@ -1168,7 +1281,7 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="modal-header">
           <span class="modal-title">${escapeHtml(tr("mobile_quick_reader_title"))}</span>
-          <button class="icon-btn" id="m-sheet-close">${Icons.close()}</button>
+          <button class="icon-btn" id="m-sheet-close" aria-label="${escapeAttr(tr("common_close"))}">${Icons.close()}</button>
         </div>
 
         <div class="modal-body">
@@ -1195,9 +1308,9 @@ function renderQuickReaderSheet(container: HTMLElement, handlers: MobileChromeHa
             <div class="qr-seg-row">
               <span style="font-size:13px;font-weight:500;">${escapeHtml(tr("mobile_page_zoom"))}</span>
               <div class="qr-stepper">
-                <button type="button" id="m-zoom-out" ${hasBook ? "" : "disabled"}>${Icons.zoomOut()}</button>
+                <button type="button" id="m-zoom-out" aria-label="${escapeAttr(tr("mobile_zoom_out"))}" ${hasBook ? "" : "disabled"}>${Icons.zoomOut()}</button>
                 <button type="button" class="qr-step-val" id="m-zoom-reset" ${hasBook ? "" : "disabled"}>${Math.round(zoomFactor * 100)}%</button>
-                <button type="button" id="m-zoom-in" ${hasBook ? "" : "disabled"}>${Icons.zoomIn()}</button>
+                <button type="button" id="m-zoom-in" aria-label="${escapeAttr(tr("mobile_zoom_in"))}" ${hasBook ? "" : "disabled"}>${Icons.zoomIn()}</button>
               </div>
             </div>
 
@@ -1440,7 +1553,7 @@ function renderSleepSheet(container: HTMLElement): void {
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="modal-header">
           <span class="modal-title">${escapeHtml(tr("popover_sleep_timer"))}</span>
-          <button class="icon-btn" id="m-sheet-close">${Icons.close()}</button>
+          <button class="icon-btn" id="m-sheet-close" aria-label="${escapeAttr(tr("common_close"))}">${Icons.close()}</button>
         </div>
         <div class="modal-body">
           <div class="chip-row" style="margin-top:0;">

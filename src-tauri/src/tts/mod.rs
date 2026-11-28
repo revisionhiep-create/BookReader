@@ -19,7 +19,7 @@ use crate::tts::engine::PhononEngine;
 use crate::tts::pauses::{apply_clause_pause_boost, compute_trailing_pause_ms, trim_and_fade};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
@@ -69,6 +69,7 @@ pub struct TtsController {
     pipeline: Arc<RwLock<TextPipeline>>,
     wakeup: Arc<(Mutex<bool>, std::sync::Condvar)>,
     book_finished_flag: Arc<AtomicBool>,
+    media_keys: OnceLock<Arc<crate::media_keys::MediaKeysBridge>>,
 }
 
 impl TtsController {
@@ -112,6 +113,7 @@ impl TtsController {
             pipeline,
             wakeup: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
             book_finished_flag: Arc::new(AtomicBool::new(false)),
+            media_keys: OnceLock::new(),
         });
 
         let synth_ctrl = Arc::clone(&controller);
@@ -128,6 +130,10 @@ impl TtsController {
             .map_err(|e| format!("Failed starting TTS ticker thread: {e}"))?;
 
         Ok(controller)
+    }
+
+    pub fn attach_media_keys(&self, bridge: Arc<crate::media_keys::MediaKeysBridge>) {
+        let _ = self.media_keys.set(bridge);
     }
 
     pub fn engine(&self) -> &Arc<PhononEngine> {
@@ -344,14 +350,15 @@ impl TtsController {
     }
 
     pub fn resume(&self) {
-        let (has_audio, total, cursor) = {
+        let (has_audio, is_preview, total, cursor) = {
             let s = self.session.read().unwrap();
-            (self.audio.snapshot().has_audio, s.sentences.len(), s.cursor_idx)
+            let snap = self.audio.snapshot();
+            (snap.has_audio, snap.is_preview, s.sentences.len(), s.cursor_idx)
         };
         if total == 0 {
             return;
         }
-        if !has_audio {
+        if !has_audio || is_preview {
             self.play_from(cursor);
             return;
         }
@@ -494,15 +501,15 @@ impl TtsController {
         // Pause book playback cleanly while playing short preview
         self.pause();
         let generation = self.audio.flush_and_bump_generation();
-        self.audio.set_paused(false);
+        self.audio
+            .enqueue_speech(generation, 0, true, pcm, 0, Vec::new());
         {
             let mut s = self.session.write().unwrap();
             s.preview_active = true;
             s.highest_enqueued_idx = None;
             s.in_flight_indices.clear();
         }
-        self.audio
-            .enqueue_speech(generation, 0, true, pcm, 0, Vec::new());
+        self.audio.set_paused(false);
     }
 
     fn notify_worker(&self) {
@@ -664,7 +671,6 @@ impl TtsController {
         let mut last_recovery_attempt: Option<Instant> = None;
         #[cfg(target_os = "android")]
         let mut paused_since: Option<Instant> = None;
-        #[cfg(target_os = "android")]
         let mut last_notified_status: Option<String> = None;
 
         loop {
@@ -797,11 +803,15 @@ impl TtsController {
                 if in_fg {
                     let _ = app.emit("tts:state", &evt);
                 }
-                #[cfg(target_os = "android")]
                 if last_notified_status.as_deref() != Some(evt.status.as_str()) {
                     let playing = matches!(evt.status.as_str(), "playing" | "loading");
                     let paused = evt.status == "paused";
-                    crate::media_keys::sync_android_playback_status(playing, paused);
+                    if let Some(bridge) = self.media_keys.get() {
+                        bridge.update_status(None, playing, paused);
+                    } else {
+                        #[cfg(target_os = "android")]
+                        crate::media_keys::sync_android_playback_status(playing, paused);
+                    }
                     last_notified_status = Some(evt.status.clone());
                 }
                 last_emitted_state = Some((evt.status, evt.sentence_idx, evt.word_idx));

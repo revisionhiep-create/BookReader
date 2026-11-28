@@ -34,6 +34,8 @@ class BookReaderPlaybackService : Service() {
     private var focusRequest: AudioFocusRequest? = null
     private var noisyReceiverRegistered = false
     private var isForeground = false
+    private var hasAudioFocus = false
+    private var lastStartId: Int = -1
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -55,8 +57,11 @@ class BookReaderPlaybackService : Service() {
         mediaSession = MediaSession(this, "BookReaderSession").apply {
             setCallback(object : MediaSession.Callback() {
                 override fun onPlay() {
-                    requestAudioFocus()
-                    safeNativeAction(ACTION_PLAY)
+                    if (requestAudioFocus()) {
+                        safeNativeAction(ACTION_PLAY)
+                    } else {
+                        safeNativeAction(ACTION_PAUSE)
+                    }
                 }
 
                 override fun onPause() {
@@ -93,19 +98,37 @@ class BookReaderPlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStartId = startId
         when (intent?.action) {
             INTENT_ACTION_PLAY -> safeNativeAction(ACTION_PLAY)
             INTENT_ACTION_PAUSE -> safeNativeAction(ACTION_PAUSE)
             INTENT_ACTION_PREV -> safeNativeAction(ACTION_PREV)
             INTENT_ACTION_NEXT -> safeNativeAction(ACTION_NEXT)
             else -> {
-                val title = intent?.getStringExtra(EXTRA_TITLE) ?: currentTitle
-                val playing = intent?.getBooleanExtra(EXTRA_PLAYING, currentPlaying) ?: currentPlaying
-                val paused = intent?.getBooleanExtra(EXTRA_PAUSED, currentPaused) ?: currentPaused
+                val title = if (hasNativeState) currentTitle else (intent?.getStringExtra(EXTRA_TITLE) ?: currentTitle)
+                val playing = if (hasNativeState) currentPlaying else (intent?.getBooleanExtra(EXTRA_PLAYING, currentPlaying) ?: currentPlaying)
+                val paused = if (hasNativeState) currentPaused else (intent?.getBooleanExtra(EXTRA_PAUSED, currentPaused) ?: currentPaused)
                 applyState(title, playing, paused)
             }
         }
         return START_NOT_STICKY
+    }
+
+    private fun startForegroundCompat(notification: Notification): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun applyState(title: String, playing: Boolean, paused: Boolean) {
@@ -114,7 +137,9 @@ class BookReaderPlaybackService : Service() {
         currentPaused = paused
 
         if (playing) {
-            requestAudioFocus()
+            if (!hasAudioFocus && !requestAudioFocus()) {
+                safeNativeAction(ACTION_PAUSE)
+            }
             acquireWakeLockInternal()
         } else {
             releaseWakeLockInternal()
@@ -149,31 +174,23 @@ class BookReaderPlaybackService : Service() {
 
         val notification = buildNotification(title, playing)
         if (playing || paused) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                )
+            if (!isForeground) {
+                isForeground = startForegroundCompat(notification)
             } else {
-                startForeground(NOTIFICATION_ID, notification)
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                nm?.notify(NOTIFICATION_ID, notification)
             }
-            isForeground = true
         } else {
             if (!isForeground && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, notification)
-                }
+                startForegroundCompat(notification)
             }
             isForeground = false
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            if (lastStartId >= 0) {
+                stopSelf(lastStartId)
+            } else {
+                stopSelf()
+            }
         }
     }
 
@@ -239,11 +256,12 @@ class BookReaderPlaybackService : Service() {
         )
     }
 
-    private fun requestAudioFocus() {
-        val am = audioManager ?: return
+    private fun requestAudioFocus(): Boolean {
+        val am = audioManager ?: return true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (focusRequest == null) {
                 focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setWillPauseWhenDucked(true)
                     .setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -252,18 +270,27 @@ class BookReaderPlaybackService : Service() {
                     )
                     .setOnAudioFocusChangeListener { change ->
                         if (change == AudioManager.AUDIOFOCUS_LOSS ||
-                            change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                            change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
+                            change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK
                         ) {
+                            hasAudioFocus = false
                             safeNativeAction(ACTION_PAUSE)
+                        } else if (change == AudioManager.AUDIOFOCUS_GAIN) {
+                            hasAudioFocus = true
                         }
                     }
                     .build()
             }
-            focusRequest?.let { am.requestAudioFocus(it) }
+            val res = focusRequest?.let { am.requestAudioFocus(it) } ?: AudioManager.AUDIOFOCUS_REQUEST_FAILED
+            hasAudioFocus = res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            return hasAudioFocus
         }
+        hasAudioFocus = true
+        return true
     }
 
     private fun abandonAudioFocus() {
+        hasAudioFocus = false
         val am = audioManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             focusRequest?.let { am.abandonAudioFocusRequest(it) }
@@ -314,6 +341,16 @@ class BookReaderPlaybackService : Service() {
         mediaSession = null
         if (instance === this) instance = null
         super.onDestroy()
+        if (currentPlaying || currentPaused) {
+            appContext?.let { ctx ->
+                mainHandler.post {
+                    try {
+                        syncFromApp(ctx, currentTitle, currentPlaying, currentPaused)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -347,6 +384,8 @@ class BookReaderPlaybackService : Service() {
         private var currentPlaying: Boolean = false
         @Volatile
         private var currentPaused: Boolean = false
+        @Volatile
+        private var hasNativeState: Boolean = false
 
         private val mainHandler = Handler(Looper.getMainLooper())
         private val exportWakeLockLock = Any()
@@ -383,6 +422,7 @@ class BookReaderPlaybackService : Service() {
             currentTitle = title
             currentPlaying = playing
             currentPaused = paused
+            hasNativeState = true
             mainHandler.post {
                 val svc = instance
                 if (svc != null) {

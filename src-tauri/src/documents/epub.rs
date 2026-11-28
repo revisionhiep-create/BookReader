@@ -41,6 +41,7 @@ pub fn parse_epub(path: &Path, mut book: BookMeta) -> Result<DocumentPayload, St
     }
 
     let mut manifest: HashMap<String, String> = HashMap::new();
+    let mut manifest_order: Vec<String> = Vec::new();
     let mut ncx_path: Option<String> = None;
     for item in opf_doc.descendants().filter(|n| n.tag_name().name() == "item") {
         if let (Some(id), Some(href)) = (item.attribute("id"), item.attribute("href")) {
@@ -48,7 +49,8 @@ pub fn parse_epub(path: &Path, mut book: BookMeta) -> Result<DocumentPayload, St
             if item.attribute("media-type") == Some("application/x-dtbncx+xml") {
                 ncx_path = Some(resolved.clone());
             }
-            manifest.insert(id.to_string(), resolved);
+            manifest.insert(id.to_string(), resolved.clone());
+            manifest_order.push(resolved);
         }
     }
 
@@ -64,11 +66,11 @@ pub fn parse_epub(path: &Path, mut book: BookMeta) -> Result<DocumentPayload, St
         }
     }
 
-    // Fallback if spine was empty: use HTML/XHTML manifest entries
+    // Fallback if spine was empty: use HTML/XHTML manifest entries in manifest declaration order
     if spine_files.is_empty() {
-        for p in manifest.values() {
+        for p in manifest_order {
             if p.ends_with(".xhtml") || p.ends_with(".html") || p.ends_with(".htm") {
-                spine_files.push(p.clone());
+                spine_files.push(p);
             }
         }
     }
@@ -147,6 +149,102 @@ pub fn parse_epub(path: &Path, mut book: BookMeta) -> Result<DocumentPayload, St
     })
 }
 
+fn is_epub_block_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "div"
+            | "section"
+            | "article"
+            | "aside"
+            | "main"
+            | "header"
+            | "footer"
+            | "nav"
+            | "p"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "blockquote"
+            | "pre"
+            | "ul"
+            | "ol"
+            | "li"
+            | "dl"
+            | "dt"
+            | "dd"
+            | "figure"
+            | "figcaption"
+            | "table"
+            | "thead"
+            | "tbody"
+            | "tfoot"
+            | "tr"
+            | "td"
+            | "th"
+            | "hr"
+            | "img"
+            | "svg"
+    )
+}
+
+fn emit_epub_text_block(
+    tag: &str,
+    raw_text: &str,
+    is_heading: bool,
+    chapter_idx: usize,
+    inferred_title: &mut Option<String>,
+    sentences: &mut Vec<SentenceItem>,
+    out_html: &mut String,
+    paragraph_idx: &mut usize,
+) {
+    let cleaned = raw_text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        return;
+    }
+
+    if is_heading && inferred_title.is_none() {
+        *inferred_title = Some(cleaned.to_string());
+    }
+
+    let parts = split_sentences(cleaned);
+    if parts.is_empty() {
+        return;
+    }
+
+    out_html.push('<');
+    out_html.push_str(tag);
+    out_html.push('>');
+    let last_i = parts.len() - 1;
+    for (idx, sent) in parts.into_iter().enumerate() {
+        let sid = sentences.len();
+        let is_para_end = idx == last_i;
+        sentences.push(SentenceItem {
+            id: sid,
+            text: sent.clone(),
+            page: None,
+            paragraph_idx: *paragraph_idx,
+            is_paragraph_end: is_para_end,
+            is_section_break: is_heading && is_para_end,
+            chapter_idx: Some(chapter_idx),
+        });
+        if idx > 0 {
+            out_html.push(' ');
+        }
+        out_html.push_str(&format!(
+            r#"<span class="br-sent" data-sid="{sid}">{}</span>"#,
+            escape_html(&sent)
+        ));
+    }
+    out_html.push_str("</");
+    out_html.push_str(tag);
+    out_html.push_str(">\n");
+    *paragraph_idx += 1;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_epub_node(
     node: Node,
@@ -158,6 +256,21 @@ fn walk_epub_node(
     out_html: &mut String,
     paragraph_idx: &mut usize,
 ) {
+    if node.is_text() {
+        if let Some(t) = node.text() {
+            emit_epub_text_block(
+                "p",
+                t,
+                false,
+                chapter_idx,
+                inferred_title,
+                sentences,
+                out_html,
+                paragraph_idx,
+            );
+        }
+        return;
+    }
     if !node.is_element() {
         return;
     }
@@ -197,10 +310,99 @@ fn walk_epub_node(
             }
             return;
         }
+        "table" => {
+            out_html.push_str("<div class=\"br-table-wrap\"><table>");
+            for child in node.children() {
+                walk_epub_node(
+                    child,
+                    book_id,
+                    chapter_dir,
+                    chapter_idx,
+                    inferred_title,
+                    sentences,
+                    out_html,
+                    paragraph_idx,
+                );
+            }
+            out_html.push_str("</table></div>\n");
+            return;
+        }
+        "thead" | "tbody" | "tfoot" => {
+            for child in node.children() {
+                walk_epub_node(
+                    child,
+                    book_id,
+                    chapter_dir,
+                    chapter_idx,
+                    inferred_title,
+                    sentences,
+                    out_html,
+                    paragraph_idx,
+                );
+            }
+            return;
+        }
+        "tr" => {
+            out_html.push_str("<tr>");
+            for child in node.children() {
+                walk_epub_node(
+                    child,
+                    book_id,
+                    chapter_dir,
+                    chapter_idx,
+                    inferred_title,
+                    sentences,
+                    out_html,
+                    paragraph_idx,
+                );
+            }
+            out_html.push_str("</tr>");
+            return;
+        }
+        "td" | "th" => {
+            out_html.push_str("<td>");
+            walk_epub_children_mixed(
+                node,
+                book_id,
+                chapter_dir,
+                chapter_idx,
+                inferred_title,
+                sentences,
+                out_html,
+                paragraph_idx,
+            );
+            out_html.push_str("</td>");
+            return;
+        }
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "blockquote" | "li" => {
-            // Render any nested images in this block first
+            let has_nested_block = (tag == "blockquote" || tag == "li")
+                && node
+                    .children()
+                    .any(|c| c.is_element() && is_epub_block_tag(&c.tag_name().name().to_ascii_lowercase()));
+            if has_nested_block {
+                out_html.push('<');
+                out_html.push_str(&tag);
+                out_html.push('>');
+                walk_epub_children_mixed(
+                    node,
+                    book_id,
+                    chapter_dir,
+                    chapter_idx,
+                    inferred_title,
+                    sentences,
+                    out_html,
+                    paragraph_idx,
+                );
+                out_html.push_str("</");
+                out_html.push_str(&tag);
+                out_html.push_str(">\n");
+                return;
+            }
+
+            // Render any nested images in this leaf block first
             for desc in node.descendants() {
-                if desc.is_element() && desc.tag_name().name().eq_ignore_ascii_case("img")
+                if desc.is_element()
+                    && desc.tag_name().name().eq_ignore_ascii_case("img")
                     && let Some(src) = desc.attribute("src")
                 {
                     let resolved = resolve_zip_path(chapter_dir, src);
@@ -213,49 +415,16 @@ fn walk_epub_node(
             }
 
             let raw_text = collect_text(node);
-            let cleaned = raw_text.trim();
-            if cleaned.is_empty() {
-                return;
-            }
-
-            let is_heading = tag.starts_with('h');
-            if is_heading && inferred_title.is_none() {
-                *inferred_title = Some(cleaned.to_string());
-            }
-
-            let parts = split_sentences(cleaned);
-            if parts.is_empty() {
-                return;
-            }
-
-            out_html.push('<');
-            out_html.push_str(&tag);
-            out_html.push('>');
-            let last_i = parts.len() - 1;
-            for (idx, sent) in parts.into_iter().enumerate() {
-                let sid = sentences.len();
-                let is_para_end = idx == last_i;
-                sentences.push(SentenceItem {
-                    id: sid,
-                    text: sent.clone(),
-                    page: None,
-                    paragraph_idx: *paragraph_idx,
-                    is_paragraph_end: is_para_end,
-                    is_section_break: is_heading && is_para_end,
-                    chapter_idx: Some(chapter_idx),
-                });
-                if idx > 0 {
-                    out_html.push(' ');
-                }
-                out_html.push_str(&format!(
-                    r#"<span class="br-sent" data-sid="{sid}">{}</span>"#,
-                    escape_html(&sent)
-                ));
-            }
-            out_html.push_str("</");
-            out_html.push_str(&tag);
-            out_html.push_str(">\n");
-            *paragraph_idx += 1;
+            emit_epub_text_block(
+                &tag,
+                &raw_text,
+                tag.starts_with('h'),
+                chapter_idx,
+                inferred_title,
+                sentences,
+                out_html,
+                paragraph_idx,
+            );
             return;
         }
         "hr" => {
@@ -265,33 +434,89 @@ fn walk_epub_node(
         _ => {}
     }
 
-    // For container tags (div, section, ul, ol, span, etc.), check if children contain block tags
-    let has_block_child = node.children().any(|c| {
-        c.is_element()
-            && matches!(
-                c.tag_name().name().to_ascii_lowercase().as_str(),
-                "div"
-                    | "section"
-                    | "article"
-                    | "p"
-                    | "h1"
-                    | "h2"
-                    | "h3"
-                    | "h4"
-                    | "h5"
-                    | "h6"
-                    | "blockquote"
-                    | "ul"
-                    | "ol"
-                    | "li"
-                    | "figure"
-                    | "img"
-                    | "svg"
-            )
-    });
+    let has_block_child = node
+        .children()
+        .any(|c| c.is_element() && is_epub_block_tag(&c.tag_name().name().to_ascii_lowercase()));
 
     if has_block_child {
-        for child in node.children() {
+        walk_epub_children_mixed(
+            node,
+            book_id,
+            chapter_dir,
+            chapter_idx,
+            inferred_title,
+            sentences,
+            out_html,
+            paragraph_idx,
+        );
+    } else {
+        for desc in node.descendants() {
+            if desc.is_element()
+                && desc.tag_name().name().eq_ignore_ascii_case("img")
+                && let Some(src) = desc.attribute("src")
+            {
+                let resolved = resolve_zip_path(chapter_dir, src);
+                let url = media_url("epub", book_id, &resolved);
+                out_html.push_str(&format!(
+                    r#"<figure class="br-figure"><img src="{}" alt="Book image" loading="lazy"/></figure>"#,
+                    escape_html(&url)
+                ));
+            }
+        }
+        let raw_text = collect_text(node);
+        emit_epub_text_block(
+            "p",
+            &raw_text,
+            false,
+            chapter_idx,
+            inferred_title,
+            sentences,
+            out_html,
+            paragraph_idx,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_epub_children_mixed(
+    parent: Node,
+    book_id: &str,
+    chapter_dir: &str,
+    chapter_idx: usize,
+    inferred_title: &mut Option<String>,
+    sentences: &mut Vec<SentenceItem>,
+    out_html: &mut String,
+    paragraph_idx: &mut usize,
+) {
+    let mut inline_buf = String::new();
+    for child in parent.children() {
+        if child.is_text() {
+            if let Some(t) = child.text() {
+                inline_buf.push_str(t);
+            }
+            continue;
+        }
+        if !child.is_element() {
+            continue;
+        }
+        let ctag = child.tag_name().name().to_ascii_lowercase();
+        if matches!(ctag.as_str(), "script" | "style" | "iframe" | "object" | "embed") {
+            continue;
+        }
+        if is_epub_block_tag(&ctag) {
+            if !inline_buf.trim().is_empty() {
+                emit_epub_text_block(
+                    "p",
+                    &inline_buf,
+                    false,
+                    chapter_idx,
+                    inferred_title,
+                    sentences,
+                    out_html,
+                    paragraph_idx,
+                );
+            }
+            inline_buf.clear();
             walk_epub_node(
                 child,
                 book_id,
@@ -302,54 +527,85 @@ fn walk_epub_node(
                 out_html,
                 paragraph_idx,
             );
-        }
-    } else {
-        let raw_text = collect_text(node);
-        let cleaned = raw_text.trim();
-        if !cleaned.is_empty() {
-            let parts = split_sentences(cleaned);
-            if !parts.is_empty() {
-                out_html.push_str("<p>");
-                let last_i = parts.len() - 1;
-                for (idx, sent) in parts.into_iter().enumerate() {
-                    let sid = sentences.len();
-                    let is_para_end = idx == last_i;
-                    sentences.push(SentenceItem {
-                        id: sid,
-                        text: sent.clone(),
-                        page: None,
-                        paragraph_idx: *paragraph_idx,
-                        is_paragraph_end: is_para_end,
-                        is_section_break: false,
-                        chapter_idx: Some(chapter_idx),
-                    });
-                    if idx > 0 {
-                        out_html.push(' ');
-                    }
-                    out_html.push_str(&format!(
-                        r#"<span class="br-sent" data-sid="{sid}">{}</span>"#,
-                        escape_html(&sent)
-                    ));
-                }
-                out_html.push_str("</p>\n");
-                *paragraph_idx += 1;
+        } else if child
+            .descendants()
+            .any(|d| d.is_element() && is_epub_block_tag(&d.tag_name().name().to_ascii_lowercase()))
+        {
+            if !inline_buf.trim().is_empty() {
+                emit_epub_text_block(
+                    "p",
+                    &inline_buf,
+                    false,
+                    chapter_idx,
+                    inferred_title,
+                    sentences,
+                    out_html,
+                    paragraph_idx,
+                );
             }
+            inline_buf.clear();
+            walk_epub_children_mixed(
+                child,
+                book_id,
+                chapter_dir,
+                chapter_idx,
+                inferred_title,
+                sentences,
+                out_html,
+                paragraph_idx,
+            );
+        } else {
+            collect_text_into(child, &mut inline_buf);
         }
+    }
+    if !inline_buf.trim().is_empty() {
+        emit_epub_text_block(
+            "p",
+            &inline_buf,
+            false,
+            chapter_idx,
+            inferred_title,
+            sentences,
+            out_html,
+            paragraph_idx,
+        );
     }
 }
 
 fn collect_text(node: Node) -> String {
     let mut buf = String::new();
-    for desc in node.descendants() {
-        if desc.is_text()
-            && let Some(t) = desc.text()
-        {
-            buf.push_str(t);
-        } else if desc.is_element() && desc.tag_name().name().eq_ignore_ascii_case("br") {
-            buf.push(' ');
-        }
-    }
+    collect_text_into(node, &mut buf);
     buf.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn collect_text_into(node: Node, buf: &mut String) {
+    if node.is_text() {
+        if let Some(t) = node.text() {
+            buf.push_str(t);
+        }
+        return;
+    }
+    if !node.is_element() {
+        return;
+    }
+    let tag = node.tag_name().name().to_ascii_lowercase();
+    if matches!(tag.as_str(), "script" | "style" | "iframe" | "object" | "embed" | "svg") {
+        return;
+    }
+    if tag == "br" {
+        buf.push(' ');
+        return;
+    }
+    let is_block = is_epub_block_tag(&tag);
+    if is_block && !buf.is_empty() && !buf.ends_with(char::is_whitespace) {
+        buf.push(' ');
+    }
+    for child in node.children() {
+        collect_text_into(child, buf);
+    }
+    if is_block && !buf.is_empty() && !buf.ends_with(char::is_whitespace) {
+        buf.push(' ');
+    }
 }
 
 fn read_ncx_titles(archive: &mut ZipArchive<File>, ncx_path: &str) -> HashMap<String, String> {
@@ -391,7 +647,9 @@ fn parent_dir(path: &str) -> String {
 
 /// Resolves relative archive paths cleanly without directory traversal outside the archive.
 pub fn resolve_zip_path(base_dir: &str, href: &str) -> String {
-    let decoded = percent_decode(href.split('#').next().unwrap_or(href));
+    let without_frag = href.split('#').next().unwrap_or(href);
+    let without_query = without_frag.split('?').next().unwrap_or(without_frag);
+    let decoded = percent_decode(without_query);
     let mut parts: Vec<&str> = if decoded.starts_with('/') || base_dir.is_empty() {
         Vec::new()
     } else {

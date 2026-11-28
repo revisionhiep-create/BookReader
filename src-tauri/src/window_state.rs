@@ -389,6 +389,7 @@ struct DebounceInner {
     dirty: bool,
     deadline: Option<Instant>,
     shutdown: bool,
+    revision: u64,
 }
 
 /// Restores saved window geometry with multi-monitor safeguards before showing the window,
@@ -432,12 +433,15 @@ pub fn init_window_state(window: WebviewWindow, storage: Arc<Storage>) {
             dirty: false,
             deadline: None,
             shutdown: false,
+            revision: 0,
         }),
         Condvar::new(),
     ));
+    let write_lock = Arc::new(Mutex::new(()));
 
     let worker_debouncer = Arc::clone(&debouncer);
     let worker_storage = Arc::clone(&storage);
+    let worker_write_lock = Arc::clone(&write_lock);
     let _ = std::thread::Builder::new()
         .name("bookreader-winstate".to_string())
         .spawn(move || {
@@ -462,7 +466,7 @@ pub fn init_window_state(window: WebviewWindow, storage: Arc<Storage>) {
                                 _ => {
                                     guard.dirty = false;
                                     guard.deadline = None;
-                                    break guard.latest.clone();
+                                    break guard.latest.clone().map(|s| (s, guard.revision));
                                 }
                             }
                         }
@@ -470,8 +474,15 @@ pub fn init_window_state(window: WebviewWindow, storage: Arc<Storage>) {
                     }
                 };
 
-                if let Some(state) = snapshot {
-                    if let Err(err) = worker_storage.save_window_state(state) {
+                if let Some((state, snap_rev)) = snapshot {
+                    let _write_guard = worker_write_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    let still_current = {
+                        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+                        !guard.shutdown && guard.revision == snap_rev
+                    };
+                    if still_current
+                        && let Err(err) = worker_storage.save_window_state(state)
+                    {
                         tracing::warn!(error = %err, "Failed to persist debounced window state");
                     }
                 }
@@ -482,6 +493,7 @@ pub fn init_window_state(window: WebviewWindow, storage: Arc<Storage>) {
     let window_for_events = window.clone();
     let event_debouncer = Arc::clone(&debouncer);
     let event_storage = Arc::clone(&storage);
+    let event_write_lock = Arc::clone(&write_lock);
 
     window.on_window_event(move |event| match event {
         WindowEvent::Moved(_)
@@ -496,6 +508,7 @@ pub fn init_window_state(window: WebviewWindow, storage: Arc<Storage>) {
                 if guard.latest.as_ref() != Some(&next) {
                     guard.latest = Some(next);
                     guard.dirty = true;
+                    guard.revision = guard.revision.saturating_add(1);
                     guard.deadline = Some(Instant::now() + Duration::from_millis(SAVE_DEBOUNCE_MS));
                     cvar.notify_one();
                 }
@@ -514,11 +527,13 @@ pub fn init_window_state(window: WebviewWindow, storage: Arc<Storage>) {
                 }
                 guard.dirty = false;
                 guard.shutdown = true;
+                guard.revision = guard.revision.saturating_add(1);
                 let out = guard.latest.clone();
                 cvar.notify_one();
                 out
             };
             if let Some(state) = final_state {
+                let _write_guard = event_write_lock.lock().unwrap_or_else(|e| e.into_inner());
                 if let Err(err) = event_storage.save_window_state(state) {
                     tracing::warn!(error = %err, "Failed to persist final window state on close");
                 }

@@ -60,8 +60,9 @@ export class ScrollController {
     });
 
     window.addEventListener("keydown", (e) => {
+      if (state.activeModal !== null) return;
       const target = e.target as HTMLElement | null;
-      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      if (target && (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable)) return;
       if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(e.key)) {
         markUserScroll();
       }

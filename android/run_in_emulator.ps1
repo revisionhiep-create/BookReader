@@ -115,17 +115,18 @@ if ($emuSerial) {
 }
 
 Write-Host "Installing and launching BookReader on emulator..."
-$runRes = Invoke-NativeSafe -Exe $AndroidCli -CommandArgs @("run", "--apks", $ApkPath)
+$devFlags = if ($emuSerial) { @("--device", $emuSerial) } else { @() }
+$runRes = Invoke-NativeSafe -Exe $AndroidCli -CommandArgs (@("run", "--apks", $ApkPath) + $devFlags)
 if ($runRes.ExitCode -ne 0) {
     if ($adbExe -and (Test-Path $adbExe) -and $emuSerial) {
         Write-Host "Uninstalling existing com.bookreader.android (e.g. different CI debug key) and retrying..."
         Invoke-NativeSafe -Exe $adbExe -CommandArgs @("-s", $emuSerial, "uninstall", "com.bookreader.android") | Out-Null
     }
-    $runRes = Invoke-NativeSafe -Exe $AndroidCli -CommandArgs @("run", "--apks", $ApkPath)
+    $runRes = Invoke-NativeSafe -Exe $AndroidCli -CommandArgs (@("run", "--apks", $ApkPath) + $devFlags)
 }
 if ($runRes.ExitCode -ne 0) {
     Write-Host "Falling back to direct install + launcher intent..."
-    $instRes = Invoke-NativeSafe -Exe $AndroidCli -CommandArgs @("install", "--apks", $ApkPath)
+    $instRes = Invoke-NativeSafe -Exe $AndroidCli -CommandArgs (@("install", "--apks", $ApkPath) + $devFlags)
     if ($instRes.ExitCode -ne 0) {
         throw "Failed installing APK '$ApkPath': $($instRes.Output)"
     }

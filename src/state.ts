@@ -166,6 +166,13 @@ export function applySettingsSideEffects(settings: Settings): void {
 let settingsRev = 0;
 let persistQueue: Promise<void> = Promise.resolve();
 
+export function syncServerSettings(saved: Settings): void {
+  settingsRev++;
+  state.settings = saved;
+  applySettingsSideEffects(saved);
+  notify();
+}
+
 export function persistSettings(patch: Partial<Settings>): Promise<void> {
   const rev = ++settingsRev;
   const next: Settings = { ...state.settings, ...patch };

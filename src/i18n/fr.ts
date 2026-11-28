@@ -45,7 +45,7 @@ const fr: Record<TranslationKey, string> = {
   // Generic toasts
   toast_import_failed: "Échec de l'importation : {error}",
   toast_open_book_failed: "Impossible d'ouvrir le livre : {error}",
-  toast_pdf_reflow_hint: "Astuce : ouvrez Aa → Recadrer le texte pour adapter les PDF zoomés",
+  toast_pdf_reflow_hint: "Astuce : ouvrez Aa → Adapter le texte pour réorganiser les PDF zoomés",
   toast_switched_original_margins: "Passé en page d'origine pour ajuster les marges du PDF",
   toast_bookmark_added: "Signet ajouté",
   toast_model_ready: "{model} prêt !",
@@ -335,6 +335,20 @@ const fr: Record<TranslationKey, string> = {
   library_search_placeholder: "Rechercher par titre, fichier ou format...",
   library_search_aria: "Rechercher dans la bibliothèque",
   library_clear_search_tooltip: "Effacer la recherche",
+  library_select_all: "Tout sélectionner",
+  library_selected_count: "{count} sélectionné(s)",
+  library_clear_selection: "Effacer la sélection",
+  library_delete_selected: "Supprimer la sélection ({count})",
+  library_select_book_aria: "Sélectionner {title}",
+  library_multiselect_hint: "Clic, {mod}+Clic, Maj+Clic, {mod}+A, Suppr",
+  library_deleted_count: "{count} {noun} supprimé(s)",
+  library_clear_all_btn: "Tout effacer",
+  library_clear_all_confirm_title: "Effacer les {count} livres de BookReader ?",
+  library_clear_all_confirm_desc:
+    "Cela supprime toutes les copies de livres importées dans BookReader pour libérer de l'espace. Vos fichiers d'origine sur l'appareil ne seront pas touchés.",
+  library_clear_all_confirm_action: "Tout effacer ({count})",
+  library_cleared_toast: "Tous les livres ont été supprimés de la bibliothèque",
+  library_clear_failed: "Échec du nettoyage de la bibliothèque : {error}",
 
   // Pronunciation & Ignore rules modal
   rules_pronunciation_title: "Prononciation",
@@ -433,6 +447,8 @@ const fr: Record<TranslationKey, string> = {
   mobile_pdf_original: "Page d'origine",
   mobile_pdf_reflow: "Adapter le texte",
   mobile_page_zoom: "Zoom de page",
+  mobile_zoom_out: "Zoom arrière",
+  mobile_zoom_in: "Zoom avant",
   mobile_font_size: "Taille de police",
   mobile_line_height: "Hauteur de ligne",
   mobile_cc_label: "Sous-titres (CC)",

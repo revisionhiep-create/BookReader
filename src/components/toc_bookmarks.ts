@@ -9,6 +9,7 @@ export interface TocModalHandlers {
   onJumpSentence: (sentenceIdx: number) => void;
   onClose: () => void;
   onChanged: () => void;
+  onToast?: (msg: string) => void;
 }
 
 let activeMobileTab: "chapters" | "bookmarks" = "chapters";
@@ -107,16 +108,22 @@ export function renderTocBookmarksModal(
     const idx = state.tts.sentence_idx;
     const sent = state.sentences[idx];
     const snippet = sent ? sent.text.slice(0, 44) : tr("toc_position_label", { pos: idx + 1 });
-    const updated = await invoke<BookMeta>("add_bookmark", {
-      bookId: book.id,
-      label: snippet,
-      sentenceIdx: idx,
-      page: sent?.page ?? null,
-    });
-    state.activeBook = updated;
-    state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
-    handlers.onChanged();
-    renderTocBookmarksModal(container, handlers);
+    try {
+      const updated = await invoke<BookMeta>("add_bookmark", {
+        bookId: book.id,
+        label: snippet,
+        sentenceIdx: idx,
+        page: sent?.page ?? null,
+      });
+      state.activeBook = updated;
+      state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
+      handlers.onChanged();
+      if (state.activeModal === "toc") {
+        renderTocBookmarksModal(container, handlers);
+      }
+    } catch (err) {
+      handlers.onToast?.(String(err));
+    }
   });
 
   container.querySelectorAll<HTMLElement>("[data-jump-sid]").forEach((el) => {
@@ -130,14 +137,20 @@ export function renderTocBookmarksModal(
   container.querySelectorAll<HTMLButtonElement>("[data-del-bm]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!book) return;
-      const updated = await invoke<BookMeta>("remove_bookmark", {
-        bookId: book.id,
-        bookmarkId: btn.dataset.delBm!,
-      });
-      state.activeBook = updated;
-      state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
-      handlers.onChanged();
-      renderTocBookmarksModal(container, handlers);
+      try {
+        const updated = await invoke<BookMeta>("remove_bookmark", {
+          bookId: book.id,
+          bookmarkId: btn.dataset.delBm!,
+        });
+        state.activeBook = updated;
+        state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
+        handlers.onChanged();
+        if (state.activeModal === "toc") {
+          renderTocBookmarksModal(container, handlers);
+        }
+      } catch (err) {
+        handlers.onToast?.(String(err));
+      }
     });
   });
 }

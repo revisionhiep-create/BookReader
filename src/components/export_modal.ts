@@ -14,6 +14,7 @@ let draftFormat: ExportFormat = "mp3";
 let draftScope: ExportScope = "entire_book";
 let draftStart = 1;
 let draftEnd = 50;
+let startingExport = false;
 
 function translateExportStatus(status: string): string {
   switch (status) {
@@ -37,7 +38,10 @@ function translateExportStatus(status: string): string {
 export function renderExportModal(container: HTMLElement, handlers: ExportModalHandlers): void {
   const book = state.activeBook;
   const totalSents = state.sentences.length;
-  if (draftEnd > totalSents && totalSents > 0) draftEnd = totalSents;
+  if (totalSents > 0) {
+    draftStart = Math.max(1, Math.min(totalSents, Number.isFinite(draftStart) ? draftStart : 1));
+    draftEnd = Math.max(draftStart, Math.min(totalSents, Number.isFinite(draftEnd) ? draftEnd : totalSents));
+  }
 
   const prog = state.exportProgress;
   const isActive = prog && ["preparing", "running", "finalizing"].includes(prog.status);
@@ -128,7 +132,7 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
           ${
             isActive
               ? `<button class="btn-secondary" id="btn-cancel-export">${escapeHtml(tr("export_cancel_btn"))}</button>`
-              : `<button class="btn-primary" id="btn-start-export" ${!book || totalSents === 0 ? "disabled" : ""}>${escapeHtml(tr("export_start_btn"))}</button>`
+              : `<button class="btn-primary" id="btn-start-export" ${!book || totalSents === 0 || startingExport ? "disabled" : ""}>${escapeHtml(tr("export_start_btn"))}</button>`
           }
         </div>
       </div>
@@ -148,14 +152,23 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
     renderExportModal(container, handlers);
   });
   container.querySelector<HTMLInputElement>("#exp-start")?.addEventListener("change", (e) => {
-    draftStart = Math.max(1, parseInt((e.target as HTMLInputElement).value || "1", 10));
+    const parsed = parseInt((e.target as HTMLInputElement).value || "1", 10);
+    const clamped = Math.max(1, Math.min(Math.max(1, totalSents), Number.isFinite(parsed) ? parsed : 1));
+    draftStart = clamped;
+    if (draftEnd < draftStart) draftEnd = draftStart;
   });
   container.querySelector<HTMLInputElement>("#exp-end")?.addEventListener("change", (e) => {
-    draftEnd = Math.max(1, parseInt((e.target as HTMLInputElement).value || String(totalSents), 10));
+    const parsed = parseInt((e.target as HTMLInputElement).value || String(totalSents), 10);
+    const clamped = Math.max(draftStart, Math.min(Math.max(1, totalSents), Number.isFinite(parsed) ? parsed : totalSents));
+    draftEnd = clamped;
   });
 
   container.querySelector("#btn-cancel-export")?.addEventListener("click", async () => {
-    await invoke("cancel_audio_export");
+    try {
+      await invoke("cancel_audio_export");
+    } catch (err) {
+      handlers.onToast(String(err));
+    }
   });
 
   container.querySelector("#btn-open-export-dir")?.addEventListener("click", async () => {
@@ -169,9 +182,11 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
   });
 
   container.querySelector("#btn-start-export")?.addEventListener("click", async () => {
-    if (!book) return;
+    if (!book || startingExport) return;
     const ext = draftFormat;
     const safeTitle = book.title.replace(/[\\/:*?"<>|]/g, "_");
+    startingExport = true;
+    renderExportModal(container, handlers);
     try {
       const outputPath = await saveDialog({
         defaultPath: `${safeTitle}.${ext}`,
@@ -179,14 +194,18 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
       });
       if (!outputPath) return;
 
+      const maxIdx = Math.max(0, totalSents - 1);
+      const startIdx = Math.max(0, Math.min(maxIdx, draftStart - 1));
+      const endIdx = Math.max(startIdx, Math.min(maxIdx, draftEnd - 1));
+
       await invoke("start_audio_export", {
         req: {
           book_id: book.id,
           book_title: book.title,
           format: draftFormat,
           scope: draftScope,
-          start_sentence: Math.max(0, draftStart - 1),
-          end_sentence: Math.max(0, draftEnd - 1),
+          start_sentence: startIdx,
+          end_sentence: endIdx,
           voice_id: state.settings.voice_id,
           speed: state.settings.speed,
           output_path: outputPath,
@@ -195,6 +214,11 @@ export function renderExportModal(container: HTMLElement, handlers: ExportModalH
       });
     } catch (err) {
       handlers.onToast(tr("toast_export_error", { error: String(err) }));
+    } finally {
+      startingExport = false;
+      if (state.activeModal === "export") {
+        renderExportModal(container, handlers);
+      }
     }
   });
 }

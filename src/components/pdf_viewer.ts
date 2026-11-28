@@ -40,6 +40,7 @@ export class PdfViewer {
   private viewport: HTMLElement;
   private onSentenceClick: (sid: number) => void;
   private onSentencesExtracted: (
+    bookId: string,
     sentences: SentenceItem[],
     toc: TocEntry[],
     cursorIdx: number,
@@ -68,6 +69,8 @@ export class PdfViewer {
   private prevSearchFocusedSid: number | null = null;
   private basePageDimensions: Array<{ width: number; height: number }> = [];
   private zoomTimer: number | undefined;
+  private mountGeneration = 0;
+  private extractGeneration = 0;
   private renderGeneration = 0;
   private activeRenderTasks: Map<number, pdfjsLib.RenderTask> = new Map();
   private inFlightRenders: Map<number, Promise<void>> = new Map();
@@ -77,6 +80,7 @@ export class PdfViewer {
     viewport: HTMLElement,
     onSentenceClick: (sid: number) => void,
     onSentencesExtracted: (
+      bookId: string,
       sentences: SentenceItem[],
       toc: TocEntry[],
       cursorIdx: number,
@@ -90,6 +94,8 @@ export class PdfViewer {
   }
 
   public clear(): void {
+    this.mountGeneration++;
+    this.extractGeneration++;
     if (this.zoomTimer !== undefined) {
       window.clearTimeout(this.zoomTimer);
       this.zoomTimer = undefined;
@@ -104,8 +110,8 @@ export class PdfViewer {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.lastViewportWidth = 0;
-    void this.pdfDoc?.cleanup();
-    void this.loadingTask?.destroy();
+    void this.pdfDoc?.cleanup().catch(() => {});
+    void this.loadingTask?.destroy().catch(() => {});
     this.pdfDoc = null;
     this.loadingTask = null;
     this.currentBook = null;
@@ -128,7 +134,8 @@ export class PdfViewer {
     onProgress?: (msg: string) => void,
   ): Promise<void> {
     this.clear();
-    const mountGen = this.renderGeneration;
+    const mountGen = this.mountGeneration;
+    const extractGen = this.extractGeneration;
     this.currentBook = book;
 
     this.container.innerHTML = `
@@ -139,7 +146,7 @@ export class PdfViewer {
     `;
     const loadingMsgEl = this.container.querySelector<HTMLElement>("#pdf-loading-msg");
     const reportProgress = (msg: string) => {
-      if (mountGen !== this.renderGeneration) return;
+      if (mountGen !== this.mountGeneration) return;
       if (loadingMsgEl) loadingMsgEl.textContent = msg;
       onProgress?.(msg);
     };
@@ -147,10 +154,20 @@ export class PdfViewer {
     reportProgress(tr("pdf_opening"));
     const mediaBase = state.bootstrap?.media_base_url ?? "http://bookmedia.localhost";
     const url = `${mediaBase}/book/${book.id}`;
-    this.loadingTask = pdfjsLib.getDocument({ url });
-    const doc = await this.loadingTask.promise;
-    if (mountGen !== this.renderGeneration) {
-      void doc.cleanup();
+    const task = pdfjsLib.getDocument({ url });
+    this.loadingTask = task;
+    let doc: pdfjsLib.PDFDocumentProxy;
+    try {
+      doc = await task.promise;
+    } catch (err) {
+      if (mountGen !== this.mountGeneration) {
+        return;
+      }
+      throw err;
+    }
+    if (mountGen !== this.mountGeneration) {
+      void doc.cleanup().catch(() => {});
+      void task.destroy().catch(() => {});
       return;
     }
     this.pdfDoc = doc;
@@ -160,9 +177,9 @@ export class PdfViewer {
 
     // Sample unscaled (1.0x) dimensions once so future zooms resize instantaneously
     for (let p = 1; p <= numPages; p++) {
-      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+      if (mountGen !== this.mountGeneration || this.pdfDoc !== doc) return;
       const page = await doc.getPage(p);
-      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+      if (mountGen !== this.mountGeneration || this.pdfDoc !== doc) return;
       const vp = page.getViewport({ scale: 1.0 });
       this.basePageDimensions.push({ width: vp.width, height: vp.height });
       if (p === 1 || p % 25 === 0 || p === numPages) {
@@ -170,8 +187,8 @@ export class PdfViewer {
       }
     }
 
-    const extracted = await this.extractSentencesData(false, mountGen, reportProgress);
-    if (!extracted || mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+    const extracted = await this.extractSentencesData(false, mountGen, extractGen, reportProgress);
+    if (!extracted || mountGen !== this.mountGeneration || this.pdfDoc !== doc) return;
 
     reportProgress(tr("pdf_jumping_position"));
     this.sentenceRects = extracted.rects;
@@ -186,12 +203,13 @@ export class PdfViewer {
     this.activeSid = extracted.newCursor;
     this.syncHighlight(extracted.newCursor);
     await this.onSentencesExtracted(
+      book.id,
       extracted.sentences,
       extracted.toc,
       extracted.newCursor,
       false,
     );
-    if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+    if (mountGen !== this.mountGeneration || this.pdfDoc !== doc) return;
     this.syncHighlight(extracted.newCursor);
     this.refreshVisibleHitLayers(extracted.newCursor);
 
@@ -199,13 +217,13 @@ export class PdfViewer {
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver?.disconnect();
       this.resizeObserver = new ResizeObserver(() => {
-        if (!isAndroidPlatform() || !this.pdfDoc || this.reflowActive || mountGen !== this.renderGeneration) return;
+        if (!isAndroidPlatform() || !this.pdfDoc || this.reflowActive || mountGen !== this.mountGeneration) return;
         const w = this.viewport.clientWidth;
         if (w <= 32 || Math.abs(w - this.lastViewportWidth) <= 2) return;
         this.lastViewportWidth = w;
         if (this.resizeTimer !== undefined) window.clearTimeout(this.resizeTimer);
         this.resizeTimer = window.setTimeout(() => {
-          if (mountGen === this.renderGeneration && this.pdfDoc && !this.reflowActive) {
+          if (mountGen === this.mountGeneration && this.pdfDoc && !this.reflowActive) {
             this.rebuildForZoom();
           }
         }, 120);
@@ -562,6 +580,7 @@ export class PdfViewer {
       const onMove = (ev: PointerEvent) => {
         if (!this.currentBook) return;
         const rect = card.getBoundingClientRect();
+        if (rect.height <= 0) return;
         const relY = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
         if (edge === "top") {
           const maxTop = Math.max(0.02, 0.94 - this.currentBook.pdf_footer_ignore_pct);
@@ -584,16 +603,25 @@ export class PdfViewer {
         handle.removeEventListener("pointermove", onMove);
         handle.removeEventListener("pointerup", onUp);
         handle.removeEventListener("pointercancel", onUp);
-        if (!this.currentBook) return;
-        const updated = await invoke<BookMeta>("update_pdf_margins", {
-          bookId: this.currentBook.id,
-          headerPct: this.currentBook.pdf_header_ignore_pct,
-          footerPct: this.currentBook.pdf_footer_ignore_pct,
-        });
-        this.currentBook = updated;
-        state.activeBook = updated;
-        await this.extractAllSentences(true);
-        this.syncHighlight(state.tts.sentence_idx);
+        const book = this.currentBook;
+        if (!book) return;
+        const bookId = book.id;
+        const mountGen = this.mountGeneration;
+        try {
+          const updated = await invoke<BookMeta>("update_pdf_margins", {
+            bookId,
+            headerPct: book.pdf_header_ignore_pct,
+            footerPct: book.pdf_footer_ignore_pct,
+          });
+          if (mountGen !== this.mountGeneration || this.currentBook?.id !== bookId) return;
+          this.currentBook = updated;
+          state.activeBook = updated;
+          await this.extractAllSentences(true);
+          if (mountGen !== this.mountGeneration || this.currentBook?.id !== bookId) return;
+          this.syncHighlight(state.tts.sentence_idx);
+        } catch (err) {
+          console.error("Failed updating PDF margins:", err);
+        }
       };
 
       handle.addEventListener("pointermove", onMove);
@@ -711,6 +739,7 @@ export class PdfViewer {
         if (gen !== this.renderGeneration || this.pdfDoc !== doc) return;
         this.renderedPages.add(pageNum);
         this.renderPageHighlights(pageNum);
+        this.evictFarRenderedPages(pageNum);
       } finally {
         if (gen === this.renderGeneration) {
           this.renderingPages.delete(pageNum);
@@ -725,24 +754,62 @@ export class PdfViewer {
     await work;
   }
 
+  private evictFarRenderedPages(anchorPage: number): void {
+    const MAX_RENDERED_CANVASES = 14;
+    if (this.renderedPages.size <= MAX_RENDERED_CANVASES) return;
+    const sorted = Array.from(this.renderedPages)
+      .filter((p) => !this.renderingPages.has(p) && Math.abs(p - anchorPage) > 4)
+      .sort((a, b) => Math.abs(b - anchorPage) - Math.abs(a - anchorPage));
+    for (const p of sorted) {
+      if (this.renderedPages.size <= MAX_RENDERED_CANVASES) break;
+      const card = this.pageWraps.get(p);
+      const canvas = card?.querySelector<HTMLCanvasElement>(".pdf-canvas");
+      if (canvas) {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+      this.renderedPages.delete(p);
+    }
+  }
+
   private async extractAllSentences(
     preservingPos: boolean,
     onProgress?: (msg: string) => void,
   ): Promise<void> {
-    const mountGen = this.renderGeneration;
+    const mountGen = this.mountGeneration;
+    const extractGen = ++this.extractGeneration;
     const doc = this.pdfDoc;
-    const extracted = await this.extractSentencesData(preservingPos, mountGen, onProgress);
-    if (!extracted || mountGen !== this.renderGeneration || this.pdfDoc !== doc) return;
+    const bookId = this.currentBook?.id;
+    if (!doc || !bookId) return;
+    const extracted = await this.extractSentencesData(preservingPos, mountGen, extractGen, onProgress);
+    if (
+      !extracted ||
+      mountGen !== this.mountGeneration ||
+      extractGen !== this.extractGeneration ||
+      this.pdfDoc !== doc ||
+      this.currentBook?.id !== bookId
+    ) {
+      return;
+    }
 
     this.sentenceRects = extracted.rects;
     this.extractedSentences = extracted.sentences;
     this.pageSentences = extracted.pageSentences;
     await this.onSentencesExtracted(
+      bookId,
       extracted.sentences,
       extracted.toc,
       extracted.newCursor,
       preservingPos,
     );
+    if (
+      mountGen !== this.mountGeneration ||
+      extractGen !== this.extractGeneration ||
+      this.pdfDoc !== doc ||
+      this.currentBook?.id !== bookId
+    ) {
+      return;
+    }
     if (this.reflowActive) {
       this.buildReflowDom();
       this.syncHighlight(extracted.newCursor);
@@ -754,6 +821,7 @@ export class PdfViewer {
   private async extractSentencesData(
     preservingPos: boolean,
     mountGen: number,
+    extractGen: number,
     onProgress?: (msg: string) => void,
   ): Promise<{
     sentences: SentenceItem[];
@@ -765,6 +833,10 @@ export class PdfViewer {
     const doc = this.pdfDoc;
     const book = this.currentBook;
     if (!doc || !book) return null;
+    const isStale = () =>
+      mountGen !== this.mountGeneration ||
+      extractGen !== this.extractGeneration ||
+      this.pdfDoc !== doc;
 
     const oldSid = state.tts.sentence_idx;
     const oldPage = state.sentences[oldSid]?.page ?? 1;
@@ -776,15 +848,15 @@ export class PdfViewer {
     const numPages = doc.numPages;
 
     for (let p = 1; p <= numPages; p++) {
-      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
+      if (isStale()) return null;
       if (p === 1 || p % 15 === 0 || p === numPages) {
         onProgress?.(tr("pdf_indexing_page", { current: p, total: numPages }));
       }
       const page = await doc.getPage(p);
-      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
+      if (isStale()) return null;
       const vp = page.getViewport({ scale: 1.0 });
       const content = await page.getTextContent();
-      if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
+      if (isStale()) return null;
       const spans: PdfSpan[] = [];
 
       for (const rawItem of content.items) {
@@ -825,8 +897,8 @@ export class PdfViewer {
     }
 
     // Extract PDF outline / TOC if present
-    const toc = await this.extractOutlineToc(sentences);
-    if (mountGen !== this.renderGeneration || this.pdfDoc !== doc) return null;
+    const toc = await this.extractOutlineToc(sentences, doc, mountGen);
+    if (isStale()) return null;
 
     let newCursor = book.current_sentence_idx;
     if (preservingPos) {
@@ -838,23 +910,31 @@ export class PdfViewer {
     return { sentences, rects, pageSentences, toc, newCursor };
   }
 
-  private async extractOutlineToc(sentences: SentenceItem[]): Promise<TocEntry[]> {
-    if (!this.pdfDoc) return [];
+  private async extractOutlineToc(
+    sentences: SentenceItem[],
+    doc: pdfjsLib.PDFDocumentProxy,
+    mountGen: number,
+  ): Promise<TocEntry[]> {
+    if (this.pdfDoc !== doc || mountGen !== this.mountGeneration) return [];
     try {
-      const outline = await this.pdfDoc.getOutline();
-      if (!outline || outline.length === 0) return [];
+      const outline = await doc.getOutline();
+      if (!outline || outline.length === 0 || this.pdfDoc !== doc || mountGen !== this.mountGeneration) {
+        return [];
+      }
       const toc: TocEntry[] = [];
 
       const walk = async (items: typeof outline, level: number) => {
         for (const item of items) {
+          if (this.pdfDoc !== doc || mountGen !== this.mountGeneration) return;
           let pageNum = 1;
           try {
             const dest =
               typeof item.dest === "string"
-                ? await this.pdfDoc!.getDestination(item.dest)
+                ? await doc.getDestination(item.dest)
                 : item.dest;
+            if (this.pdfDoc !== doc || mountGen !== this.mountGeneration) return;
             if (Array.isArray(dest) && dest[0]) {
-              const idx = await this.pdfDoc!.getPageIndex(dest[0] as never);
+              const idx = await doc.getPageIndex(dest[0] as never);
               pageNum = idx + 1;
             }
           } catch {

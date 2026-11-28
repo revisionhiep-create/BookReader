@@ -12,6 +12,9 @@ import { invoke, listen } from "./tauri_bridge";
 import { renderCcBar, resetCcClockForSeek, syncCcPlaybackClock } from "./components/cc_bar";
 import { renderExportModal } from "./components/export_modal";
 import {
+  cleanupLibraryModal,
+  clearLibrarySelection,
+  hasLibrarySelection,
   pickAndImportBook,
   renderLibraryModal,
   resetLibrarySearch,
@@ -22,7 +25,7 @@ import { RichViewer } from "./components/rich_viewer";
 import { resetRulesModalDraft, renderRulesModal } from "./components/rules_modal";
 import { ScrollController } from "./components/scroll_controller";
 import { renderSearchBar } from "./components/search_bar";
-import { renderSettingsModal } from "./components/settings_modal";
+import { renderSettingsModal, syncSettingsDownloadProgress } from "./components/settings_modal";
 import { renderSetupModal } from "./components/setup_modal";
 import { escapeHtml, renderSidebar } from "./components/sidebar";
 import { renderTocBookmarksModal } from "./components/toc_bookmarks";
@@ -41,6 +44,8 @@ import {
 import { renderVoicePickerModal } from "./components/voice_picker";
 import { getLanguageMeta, setActiveUiLanguage, tr } from "./i18n";
 import { Icons } from "./icons";
+import appIconUrl from "./assets/app-icon.png";
+import bootSplashUrl from "./assets/boot-splash.webp";
 import {
   applySettingsSideEffects,
   isAndroidPlatform,
@@ -133,7 +138,7 @@ function setBusyLoading(msg: string | null): void {
 
 let toastTimer: number | undefined;
 function showToast(msg: string): void {
-  toastHostEl.innerHTML = `<div class="toast">${msg.replace(/</g, "&lt;")}</div>`;
+  toastHostEl.innerHTML = `<div class="toast">${escapeHtml(msg)}</div>`;
   if (toastTimer !== undefined) window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => {
     toastHostEl.innerHTML = "";
@@ -152,21 +157,21 @@ const pdfViewer = new PdfViewer(
   (sid) => {
     void jumpAndPlay(sid);
   },
-  async (sentences, toc, cursorIdx, preserving) => {
+  async (bookId, sentences, toc, cursorIdx, preserving) => {
+    if (state.activeBook?.id !== bookId) return;
     state.sentences = sentences;
     state.toc = toc;
     state.tts.sentence_idx = cursorIdx;
     state.tts.total_sentences = sentences.length;
-    if (state.activeBook) {
-      const updated = await invoke<BookMeta>("set_pdf_sentences", {
-        bookId: state.activeBook.id,
-        sentences,
-        cursorIdx,
-        preserving,
-      });
-      state.activeBook = updated;
-      state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
-    }
+    const updated = await invoke<BookMeta>("set_pdf_sentences", {
+      bookId,
+      sentences,
+      cursorIdx,
+      preserving,
+    });
+    if (state.activeBook?.id !== bookId) return;
+    state.activeBook = updated;
+    state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
     renderChrome();
     pdfViewer.syncHighlight(cursorIdx);
     if (!preserving) {
@@ -179,6 +184,7 @@ function openModal(modal: ActiveModal): void {
   if (modal === "voice_clone" && !isVoiceCloningEnabled()) {
     return;
   }
+  cleanupLibraryModal();
   state.quickReaderSheetOpen = false;
   state.mobilePopoverSheet = null;
   state.mobileDrawerOpen = false;
@@ -200,6 +206,7 @@ function closeModal(): void {
   if (state.activeModal === "setup" && !state.bootstrap?.model_ready) {
     return;
   }
+  cleanupLibraryModal();
   state.activeModal = null;
   renderModal();
 }
@@ -207,6 +214,8 @@ function closeModal(): void {
 let ttsActionInFlight = false;
 let seekRequestSeq = 0;
 let pendingSeekTarget: number | null = null;
+let openBookSeq = 0;
+let previewHandlersInstalled = false;
 
 async function runTtsAction<T>(
   busyHint: string | null,
@@ -307,6 +316,9 @@ function syncActiveHighlight(): void {
 }
 
 async function openBookById(bookId: string): Promise<void> {
+  const mySeq = ++openBookSeq;
+  pendingSeekTarget = null;
+  seekRequestSeq++;
   setBusyLoading(tr("loading_book_restore"));
   try {
     state.searchOpen = false;
@@ -314,10 +326,22 @@ async function openBookById(bookId: string): Promise<void> {
     state.searchHits = [];
     state.searchFocusedSid = null;
     state.pdfMarginsEditing = false;
+    renderSearch();
     resetCcClockForSeek();
 
+    if (state.tts.status === "playing" || state.tts.status === "loading") {
+      try {
+        state.tts = await invoke<TtsStateEvent>("tts_pause");
+      } catch {
+        // Continue opening requested book
+      }
+      if (mySeq !== openBookSeq) return;
+    }
+
     const payload = await invoke<DocumentPayload>("open_book", { bookId });
+    if (mySeq !== openBookSeq) return;
     state.activeBook = payload.book;
+    state.settings = { ...state.settings, last_book_id: payload.book.id };
     state.library = [
       payload.book,
       ...state.library.filter((b) => b.id !== payload.book.id),
@@ -329,25 +353,77 @@ async function openBookById(bookId: string): Promise<void> {
       state.sentences = [];
       state.toc = [];
       state.htmlChapters = [];
+      state.tts = {
+        ...state.tts,
+        status: "idle",
+        book_id: payload.book.id,
+        sentence_idx: payload.book.current_sentence_idx,
+        word_idx: 0,
+        playback_ms: 0,
+        sentence_duration_ms: 0,
+        word_starts_ms: undefined,
+        total_sentences: payload.book.total_sentences,
+        error: null,
+      };
       renderChrome();
-      await pdfViewer.mountPdf(payload.book, (msg) => setBusyLoading(msg));
+      await pdfViewer.mountPdf(payload.book, (msg) => {
+        if (mySeq === openBookSeq) setBusyLoading(msg);
+      });
     } else {
       pdfViewer.clear();
       state.sentences = payload.sentences;
       state.toc = payload.toc;
       state.htmlChapters = payload.html_chapters;
-      state.tts.sentence_idx = payload.book.current_sentence_idx;
-      state.tts.total_sentences = payload.sentences.length;
-      state.tts.word_idx = 0;
+      state.tts = {
+        ...state.tts,
+        status: "idle",
+        book_id: payload.book.id,
+        sentence_idx: payload.book.current_sentence_idx,
+        word_idx: 0,
+        playback_ms: 0,
+        sentence_duration_ms: 0,
+        word_starts_ms: undefined,
+        total_sentences: payload.sentences.length,
+        error: null,
+      };
       richViewer.mountDocument(payload);
       renderChrome();
       scrollCtrl.onActiveSentenceChanged(payload.book.current_sentence_idx, true, true);
     }
   } catch (err) {
+    if (mySeq !== openBookSeq) return;
     showToast(tr("toast_open_book_failed", { error: String(err) }));
   } finally {
-    setBusyLoading(null);
+    if (mySeq === openBookSeq) {
+      setBusyLoading(null);
+    }
   }
+}
+
+function handleActiveBookDeleted(): void {
+  openBookSeq++;
+  pendingSeekTarget = null;
+  seekRequestSeq++;
+  state.searchOpen = false;
+  state.searchQuery = "";
+  state.searchHits = [];
+  state.searchFocusedSid = null;
+  state.pdfMarginsEditing = false;
+  state.tts = {
+    status: "idle",
+    book_id: null,
+    sentence_idx: 0,
+    word_idx: 0,
+    playback_ms: 0,
+    sentence_duration_ms: 0,
+    total_sentences: 0,
+    elapsed_est_sec: 0,
+    remaining_est_sec: 0,
+    error: null,
+  };
+  resetCcClockForSeek();
+  renderSearch();
+  renderChrome();
 }
 
 function renderEmptyWelcome(): void {
@@ -498,6 +574,22 @@ function applyCcSize(nextRaw: number): void {
   void persistSettings({ typography: { ...t, cc_font_size: next } });
 }
 
+async function stepSentence(delta: number): Promise<void> {
+  pendingSeekTarget = null;
+  seekRequestSeq++;
+  try {
+    state.autoScrollEnabled = true;
+    resetCcClockForSeek();
+    state.tts = await invoke<TtsStateEvent>("tts_step_sentence", { delta });
+    syncCcPlaybackClock(state.tts, ccHostEl);
+    syncActiveHighlight();
+    scrollCtrl.onActiveSentenceChanged(state.tts.sentence_idx, true);
+    renderChrome();
+  } catch (err) {
+    showToast(String(err));
+  }
+}
+
 function getPlaybackActions() {
   return {
     onOpenModal: openModal,
@@ -526,15 +618,7 @@ function getPlaybackActions() {
       })();
     },
     onStep: (delta: number) => {
-      void (async () => {
-        state.autoScrollEnabled = true;
-        resetCcClockForSeek();
-        state.tts = await invoke<TtsStateEvent>("tts_step_sentence", { delta });
-        syncCcPlaybackClock(state.tts, ccHostEl);
-        syncActiveHighlight();
-        scrollCtrl.onActiveSentenceChanged(state.tts.sentence_idx, true);
-        renderChrome();
-      })();
+      void stepSentence(delta);
     },
     onSeekSentence: (idx: number) => {
       void jumpAndPlay(idx);
@@ -570,18 +654,22 @@ function getPlaybackActions() {
     onAddBookmark: () => {
       void (async () => {
         if (!state.activeBook) return;
-        const idx = state.tts.sentence_idx;
-        const sent = state.sentences[idx];
-        const label = sent ? sent.text.slice(0, 44) : tr("bookmark_sentence_label", { num: idx + 1 });
-        const updated = await invoke<BookMeta>("add_bookmark", {
-          bookId: state.activeBook.id,
-          label,
-          sentenceIdx: idx,
-          page: sent?.page ?? null,
-        });
-        state.activeBook = updated;
-        state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
-        showToast(tr("toast_bookmark_added"));
+        try {
+          const idx = state.tts.sentence_idx;
+          const sent = state.sentences[idx];
+          const label = sent ? sent.text.slice(0, 44) : tr("bookmark_sentence_label", { num: idx + 1 });
+          const updated = await invoke<BookMeta>("add_bookmark", {
+            bookId: state.activeBook.id,
+            label,
+            sentenceIdx: idx,
+            page: sent?.page ?? null,
+          });
+          state.activeBook = updated;
+          state.library = state.library.map((b) => (b.id === updated.id ? updated : b));
+          showToast(tr("toast_bookmark_added"));
+        } catch (err) {
+          showToast(String(err));
+        }
       })();
     },
   };
@@ -671,6 +759,7 @@ function renderModal(): void {
         onLibraryChanged: () => {
           renderChrome();
         },
+        onActiveBookDeleted: handleActiveBookDeleted,
         onToast: showToast,
       });
       return;
@@ -704,6 +793,7 @@ function renderModal(): void {
         },
         onClose: closeModal,
         onChanged: renderChrome,
+        onToast: showToast,
       });
       return;
     case "export":
@@ -734,13 +824,63 @@ function renderModal(): void {
   }
 }
 
+function mountBootSplash(): () => void {
+  if (isPreviewAndroidMode()) {
+    return () => {};
+  }
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+  const splash = document.createElement("div");
+  splash.id = "boot-splash";
+  splash.className = "boot-splash";
+  splash.setAttribute("aria-hidden", "true");
+  splash.innerHTML = `<img class="boot-splash-img" src="${reducedMotion ? appIconUrl : bootSplashUrl}" alt="BookReader" draggable="false" />`;
+  document.body.appendChild(splash);
+
+  const startedAt = performance.now();
+  const minMs = reducedMotion ? 450 : 2520;
+  let dismissed = false;
+  let readyTimer: number | undefined;
+  let safetyTimer: number | undefined;
+
+  const dismiss = (): void => {
+    if (dismissed) return;
+    dismissed = true;
+    if (readyTimer !== undefined) window.clearTimeout(readyTimer);
+    if (safetyTimer !== undefined) window.clearTimeout(safetyTimer);
+    window.removeEventListener("keydown", onKey);
+    splash.classList.add("fade-out");
+    window.setTimeout(() => splash.remove(), 280);
+  };
+
+  const onKey = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape" || ev.key === "Enter" || ev.key === " ") {
+      dismiss();
+    }
+  };
+
+  splash.addEventListener("click", dismiss, { once: true });
+  window.addEventListener("keydown", onKey);
+  safetyTimer = window.setTimeout(dismiss, 4500);
+
+  return () => {
+    if (dismissed) return;
+    const waitMs = Math.max(0, minMs - (performance.now() - startedAt));
+    readyTimer = window.setTimeout(dismiss, waitMs);
+  };
+}
+
+const finishBootSplash = mountBootSplash();
+
 async function initApp(): Promise<void> {
   if (isPreviewAndroidMode() && !window.__TAURI_INTERNALS__) {
     const mod = await import("../android/preview/mock_tauri");
     mod.installPreviewMock();
     document.documentElement.setAttribute("data-preview", "true");
-    installPreviewTouchScroll();
-    attachPreviewMessageHandler();
+    if (!previewHandlersInstalled) {
+      previewHandlersInstalled = true;
+      installPreviewTouchScroll();
+      attachPreviewMessageHandler();
+    }
   }
 
   setActiveUiLanguage(null);
@@ -780,6 +920,7 @@ async function initApp(): Promise<void> {
     viewerHostEl.querySelector("#btn-boot-retry")?.addEventListener("click", () => {
       void initApp();
     });
+    finishBootSplash();
     return;
   }
 
@@ -798,6 +939,9 @@ async function initApp(): Promise<void> {
   );
 
   await listen<TtsStateEvent>("tts:state", (ev) => {
+    if (ev.payload.book_id && state.activeBook && ev.payload.book_id !== state.activeBook.id) {
+      return;
+    }
     if (pendingSeekTarget !== null && ev.payload.sentence_idx !== pendingSeekTarget) {
       return;
     }
@@ -837,7 +981,7 @@ async function initApp(): Promise<void> {
     if (state.activeModal === "setup" && ev.payload.kind === "model") {
       renderModal();
     } else if (state.activeModal === "settings" && ev.payload.kind === "model") {
-      renderModal();
+      syncSettingsDownloadProgress(modalHostEl);
     } else if (state.activeModal === "voice_clone" && ev.payload.kind === "qwen_model") {
       syncVoiceCloneDownloadProgress(modalHostEl);
     }
@@ -898,6 +1042,7 @@ async function initApp(): Promise<void> {
   if (isPreviewAndroidMode()) {
     window.parent?.postMessage({ type: "preview:ready" }, window.location.origin);
   }
+  finishBootSplash();
 }
 
 document.addEventListener("click", () => {
@@ -1000,6 +1145,10 @@ window.addEventListener("keydown", (e) => {
   }
 
   if (e.key === "Escape") {
+    if (state.activeModal === "library" && hasLibrarySelection()) {
+      clearLibrarySelection();
+      return;
+    }
     if (state.activeModal !== null) {
       closeModal();
       return;
@@ -1048,26 +1197,10 @@ window.addEventListener("keydown", (e) => {
     })();
   } else if (e.key === "ArrowLeft") {
     e.preventDefault();
-    void (async () => {
-      state.autoScrollEnabled = true;
-      resetCcClockForSeek();
-      state.tts = await invoke<TtsStateEvent>("tts_step_sentence", { delta: -1 });
-      syncCcPlaybackClock(state.tts, ccHostEl);
-      syncActiveHighlight();
-      scrollCtrl.onActiveSentenceChanged(state.tts.sentence_idx, true);
-      renderChrome();
-    })();
+    void stepSentence(-1);
   } else if (e.key === "ArrowRight") {
     e.preventDefault();
-    void (async () => {
-      state.autoScrollEnabled = true;
-      resetCcClockForSeek();
-      state.tts = await invoke<TtsStateEvent>("tts_step_sentence", { delta: 1 });
-      syncCcPlaybackClock(state.tts, ccHostEl);
-      syncActiveHighlight();
-      scrollCtrl.onActiveSentenceChanged(state.tts.sentence_idx, true);
-      renderChrome();
-    })();
+    void stepSentence(1);
   }
 });
 

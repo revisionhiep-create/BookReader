@@ -27,7 +27,7 @@ class MainActivity : TauriActivity() {
     ensureNativeBound()
     requestNotificationsPermissionIfNeeded()
 
-    val bgColor = Color.parseColor("#181818")
+    val bgColor = Color.parseColor("#121211")
     window.decorView.setBackgroundColor(bgColor)
     @Suppress("DEPRECATION")
     window.statusBarColor = bgColor
@@ -114,13 +114,16 @@ class MainActivity : TauriActivity() {
       val resolver = ctx.contentResolver
 
       var displayName: String? = null
-      resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-        if (cursor.moveToFirst()) {
-          val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-          if (idx >= 0) {
-            displayName = cursor.getString(idx)
+      try {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+          if (cursor.moveToFirst()) {
+            val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0) {
+              displayName = cursor.getString(idx)
+            }
           }
         }
+      } catch (_: Exception) {
       }
 
       var cleanName = (displayName ?: "")
@@ -142,6 +145,17 @@ class MainActivity : TauriActivity() {
           else -> ".epub"
         }
         cleanName = if (cleanName.isEmpty()) "imported_book$ext" else "$cleanName$ext"
+      }
+
+      // Clamp UTF-8 filename length below filesystem 255-byte limit while preserving extension
+      val dotIdx = cleanName.lastIndexOf('.')
+      if (dotIdx > 0) {
+        var stem = cleanName.substring(0, dotIdx)
+        val ext = cleanName.substring(dotIdx)
+        while (stem.isNotEmpty() && (stem + ext).toByteArray(Charsets.UTF_8).size > 200) {
+          stem = stem.dropLast(1)
+        }
+        cleanName = if (stem.isEmpty()) "imported_book$ext" else "$stem$ext"
       }
 
       val destDir = File(destDirPath)

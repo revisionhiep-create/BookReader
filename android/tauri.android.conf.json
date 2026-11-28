@@ -3,7 +3,7 @@
   "identifier": "com.bookreader.android",
   "app": {
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' blob: data: http://bookmedia.localhost bookmedia: tauri:; img-src 'self' blob: data: http://bookmedia.localhost bookmedia: asset: https://asset.localhost; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost tauri: http://bookmedia.localhost bookmedia:;"
+      "csp": "default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' blob: data: http://bookmedia.localhost bookmedia: asset: https://asset.localhost; media-src 'self' blob: data: http://bookmedia.localhost bookmedia:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost tauri: http://bookmedia.localhost bookmedia:;"
     }
   },
   "bundle": {

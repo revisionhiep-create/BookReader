@@ -6,7 +6,7 @@ import {
   tr,
 } from "../i18n";
 import { Icons } from "../icons";
-import { isAndroidPlatform, persistSettings, state } from "../state";
+import { isAndroidPlatform, persistSettings, state, syncServerSettings } from "../state";
 import { invoke } from "../tauri_bridge";
 import type {
   BracketMode,
@@ -27,6 +27,23 @@ export interface SettingsModalHandlers {
 let downloadingLang: AppLanguage | null = null;
 let switchingLang: AppLanguage | null = null;
 let modelActionError = "";
+
+export function syncSettingsDownloadProgress(container: HTMLElement): void {
+  const dp = state.downloadProgress;
+  if (!dp || dp.kind !== "model") return;
+  const pct =
+    dp.bytes_total && dp.bytes_total > 0
+      ? Math.min(100, (dp.bytes_done / dp.bytes_total) * 100).toFixed(1)
+      : dp.files_total > 0
+        ? Math.min(100, (dp.files_done / dp.files_total) * 100).toFixed(1)
+        : "0";
+  const fileEl = container.querySelector("#settings-dl-file");
+  const pctEl = container.querySelector("#settings-dl-pct");
+  const fillEl = container.querySelector<HTMLElement>("#settings-dl-fill");
+  if (fileEl) fileEl.textContent = dp.current_file || tr("setup_connecting");
+  if (pctEl) pctEl.textContent = `${pct}%`;
+  if (fillEl) fillEl.style.width = `${pct}%`;
+}
 
 function rerenderIfOpen(container: HTMLElement, handlers: SettingsModalHandlers): void {
   if (state.activeModal === "settings") {
@@ -146,11 +163,11 @@ export function renderSettingsModal(
                           ? `
                         <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px;">
                           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);">
-                            <span>${escapeHtml(dp?.kind === "model" && dp.current_file ? dp.current_file : tr("setup_connecting"))}</span>
-                            <span>${dlModelPct}%</span>
+                            <span id="settings-dl-file">${escapeHtml(dp?.kind === "model" && dp.current_file ? dp.current_file : tr("setup_connecting"))}</span>
+                            <span id="settings-dl-pct">${dlModelPct}%</span>
                           </div>
                           <div class="progress-big" style="height:7px;">
-                            <div class="progress-big-fill" style="width:${dlModelPct}%"></div>
+                            <div id="settings-dl-fill" class="progress-big-fill" style="width:${dlModelPct}%"></div>
                           </div>
                         </div>
                       `
@@ -363,7 +380,7 @@ export function renderSettingsModal(
         const res = await invoke<SetTtsLanguageResponse>("set_tts_language", {
           language: targetLang,
         });
-        state.settings = res.settings;
+        syncServerSettings(res.settings);
         state.voices = res.voices;
         if (state.bootstrap) {
           state.bootstrap.language_models = res.language_models;
@@ -382,12 +399,13 @@ export function renderSettingsModal(
   container.querySelectorAll<HTMLButtonElement>("[data-preset]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const preset = btn.dataset.preset!;
+      const curPauses = state.settings.pauses;
       const nextP =
         preset === "fast_webnovel"
-          ? { ...p, preset, sentence_ms: 300, paragraph_ms: 550, section_ms: 950, comma_extra_ms: 0, semicolon_extra_ms: 0 }
+          ? { ...curPauses, preset, sentence_ms: 300, paragraph_ms: 550, section_ms: 950, comma_extra_ms: 0, semicolon_extra_ms: 0 }
           : preset === "audiobook"
-            ? { ...p, preset, sentence_ms: 550, paragraph_ms: 1050, section_ms: 1500, comma_extra_ms: 40, semicolon_extra_ms: 80 }
-            : { ...p, preset: "natural", sentence_ms: 450, paragraph_ms: 850, section_ms: 1300, comma_extra_ms: 0, semicolon_extra_ms: 0 };
+            ? { ...curPauses, preset, sentence_ms: 550, paragraph_ms: 1050, section_ms: 1500, comma_extra_ms: 40, semicolon_extra_ms: 80 }
+            : { ...curPauses, preset: "natural", sentence_ms: 450, paragraph_ms: 850, section_ms: 1300, comma_extra_ms: 0, semicolon_extra_ms: 0 };
       await persistSettings({ pauses: nextP });
       if (state.activeModal === "settings") {
         renderSettingsModal(container, handlers);
@@ -515,14 +533,22 @@ export function renderSettingsModal(
     (v) => tr("settings_unit_px", { px: Math.round(v) }),
   );
 
-  container.querySelector("#btn-open-appdata")?.addEventListener("click", () => {
+  container.querySelector("#btn-open-appdata")?.addEventListener("click", async () => {
     if (state.bootstrap?.appdata_dir) {
-      void invoke("open_folder_in_explorer", { path: state.bootstrap.appdata_dir });
+      try {
+        await invoke("open_folder_in_explorer", { path: state.bootstrap.appdata_dir });
+      } catch (err) {
+        handlers.onToast?.(String(err));
+      }
     }
   });
-  container.querySelector("#btn-open-portable")?.addEventListener("click", () => {
+  container.querySelector("#btn-open-portable")?.addEventListener("click", async () => {
     if (state.bootstrap?.data_dir) {
-      void invoke("open_folder_in_explorer", { path: state.bootstrap.data_dir });
+      try {
+        await invoke("open_folder_in_explorer", { path: state.bootstrap.data_dir });
+      } catch (err) {
+        handlers.onToast?.(String(err));
+      }
     }
   });
 }

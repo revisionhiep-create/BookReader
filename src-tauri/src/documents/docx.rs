@@ -26,47 +26,16 @@ pub fn parse_docx(path: &Path, mut book: BookMeta) -> Result<DocumentPayload, St
     let mut current_chapter_idx: Option<usize> = None;
 
     if let Some(body) = doc.descendants().find(|n| n.tag_name().name() == "body") {
-        for child in body.children().filter(|n| n.is_element()) {
-            match child.tag_name().name() {
-                "p" => {
-                    render_paragraph(
-                        child,
-                        &book.id,
-                        &rels,
-                        &mut sentences,
-                        &mut toc,
-                        &mut html,
-                        &mut paragraph_idx,
-                        &mut current_chapter_idx,
-                    );
-                }
-                "tbl" => {
-                    html.push_str("<div class=\"br-table-wrap\"><table>");
-                    for row in child.children().filter(|n| n.tag_name().name() == "tr") {
-                        html.push_str("<tr>");
-                        for cell in row.children().filter(|n| n.tag_name().name() == "tc") {
-                            html.push_str("<td>");
-                            for p in cell.children().filter(|n| n.tag_name().name() == "p") {
-                                render_paragraph(
-                                    p,
-                                    &book.id,
-                                    &rels,
-                                    &mut sentences,
-                                    &mut toc,
-                                    &mut html,
-                                    &mut paragraph_idx,
-                                    &mut current_chapter_idx,
-                                );
-                            }
-                            html.push_str("</td>");
-                        }
-                        html.push_str("</tr>");
-                    }
-                    html.push_str("</table></div>\n");
-                }
-                _ => {}
-            }
-        }
+        walk_docx_blocks(
+            body,
+            &book.id,
+            &rels,
+            &mut sentences,
+            &mut toc,
+            &mut html,
+            &mut paragraph_idx,
+            &mut current_chapter_idx,
+        );
     }
 
     book.total_sentences = sentences.len();
@@ -87,6 +56,129 @@ pub fn parse_docx(path: &Path, mut book: BookMeta) -> Result<DocumentPayload, St
 }
 
 #[allow(clippy::too_many_arguments)]
+fn walk_docx_blocks(
+    container: Node,
+    book_id: &str,
+    rels: &HashMap<String, String>,
+    sentences: &mut Vec<SentenceItem>,
+    toc: &mut Vec<TocEntry>,
+    html: &mut String,
+    paragraph_idx: &mut usize,
+    current_chapter_idx: &mut Option<usize>,
+) {
+    for child in container.children().filter(|n| n.is_element()) {
+        match child.tag_name().name() {
+            "p" => {
+                render_paragraph(
+                    child,
+                    book_id,
+                    rels,
+                    sentences,
+                    toc,
+                    html,
+                    paragraph_idx,
+                    current_chapter_idx,
+                );
+            }
+            "tbl" => {
+                html.push_str("<div class=\"br-table-wrap\"><table>");
+                for row in child.children().filter(|n| n.tag_name().name() == "tr") {
+                    html.push_str("<tr>");
+                    for cell in row.children().filter(|n| n.tag_name().name() == "tc") {
+                        html.push_str("<td>");
+                        walk_docx_blocks(
+                            cell,
+                            book_id,
+                            rels,
+                            sentences,
+                            toc,
+                            html,
+                            paragraph_idx,
+                            current_chapter_idx,
+                        );
+                        html.push_str("</td>");
+                    }
+                    html.push_str("</tr>");
+                }
+                html.push_str("</table></div>\n");
+            }
+            "sdt" => {
+                for sdt_content in child.children().filter(|n| n.tag_name().name() == "sdtContent") {
+                    walk_docx_blocks(
+                        sdt_content,
+                        book_id,
+                        rels,
+                        sentences,
+                        toc,
+                        html,
+                        paragraph_idx,
+                        current_chapter_idx,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_docx_paragraph_nodes(
+    node: Node,
+    book_id: &str,
+    rels: &HashMap<String, String>,
+    text_buf: &mut String,
+    image_urls: &mut Vec<String>,
+) {
+    if !node.is_element() {
+        return;
+    }
+    match node.tag_name().name() {
+        "AlternateContent" => {
+            if let Some(choice) = node.children().find(|n| n.tag_name().name() == "Choice") {
+                collect_docx_paragraph_nodes(choice, book_id, rels, text_buf, image_urls);
+            } else if let Some(fallback) =
+                node.children().find(|n| n.tag_name().name() == "Fallback")
+            {
+                collect_docx_paragraph_nodes(fallback, book_id, rels, text_buf, image_urls);
+            }
+            return;
+        }
+        "t" => {
+            if let Some(t) = node.text() {
+                text_buf.push_str(t);
+            }
+        }
+        "tab" | "br" => text_buf.push(' '),
+        "blip" => {
+            if let Some(rid) = node
+                .attributes()
+                .find(|a| a.name() == "embed" || a.name() == "link")
+                .map(|a| a.value())
+                && let Some(target) = rels.get(rid)
+            {
+                let zip_path = normalize_word_target(target);
+                image_urls.push(media_url("docx", book_id, &zip_path));
+            }
+        }
+        "imagedata" => {
+            if let Some(rid) = node
+                .attributes()
+                .find(|a| a.name() == "id")
+                .map(|a| a.value())
+                && let Some(target) = rels.get(rid)
+            {
+                let zip_path = normalize_word_target(target);
+                image_urls.push(media_url("docx", book_id, &zip_path));
+            }
+        }
+        _ => {}
+    }
+
+    for child in node.children() {
+        collect_docx_paragraph_nodes(child, book_id, rels, text_buf, image_urls);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_paragraph(
     p: Node,
     book_id: &str,
@@ -101,40 +193,7 @@ fn render_paragraph(
     let mut text_buf = String::new();
     let mut image_urls = Vec::new();
 
-    for node in p.descendants() {
-        match node.tag_name().name() {
-            "t" => {
-                if let Some(t) = node.text() {
-                    text_buf.push_str(t);
-                }
-            }
-            "tab" => text_buf.push(' '),
-            "br" => text_buf.push(' '),
-            "blip" => {
-                if let Some(rid) = node
-                    .attributes()
-                    .find(|a| a.name() == "embed" || a.name() == "link")
-                    .map(|a| a.value())
-                    && let Some(target) = rels.get(rid)
-                {
-                    let zip_path = normalize_word_target(target);
-                    image_urls.push(media_url("docx", book_id, &zip_path));
-                }
-            }
-            "imagedata" => {
-                if let Some(rid) = node
-                    .attributes()
-                    .find(|a| a.name() == "id")
-                    .map(|a| a.value())
-                    && let Some(target) = rels.get(rid)
-                {
-                    let zip_path = normalize_word_target(target);
-                    image_urls.push(media_url("docx", book_id, &zip_path));
-                }
-            }
-            _ => {}
-        }
-    }
+    collect_docx_paragraph_nodes(p, book_id, rels, &mut text_buf, &mut image_urls);
 
     for img_url in &image_urls {
         html.push_str(&format!(
@@ -251,12 +310,17 @@ fn normalize_word_target(target: &str) -> String {
 }
 
 pub(crate) fn read_zip_string(archive: &mut ZipArchive<File>, name: &str) -> Result<String, String> {
-    let mut entry = archive
+    const MAX_ZIP_XML_BYTES: usize = 32 * 1024 * 1024;
+    let entry = archive
         .by_name(name)
         .map_err(|e| format!("Missing archive entry {name}: {e}"))?;
     let mut buf = Vec::new();
     entry
+        .take((MAX_ZIP_XML_BYTES + 1) as u64)
         .read_to_end(&mut buf)
         .map_err(|e| format!("Failed reading {name}: {e}"))?;
+    if buf.len() > MAX_ZIP_XML_BYTES {
+        return Err(format!("Archive entry {name} exceeds maximum allowed size"));
+    }
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }

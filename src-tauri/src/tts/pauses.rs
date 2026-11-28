@@ -133,7 +133,7 @@ pub fn compute_trailing_pause_ms(
         return 0;
     }
 
-    if !pauses.adaptive_speed_scaling || speed <= 0.01 {
+    if !pauses.adaptive_speed_scaling || !speed.is_finite() || speed <= 0.01 {
         return base;
     }
 

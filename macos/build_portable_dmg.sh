@@ -2,7 +2,12 @@
 set -euo pipefail
 
 TARGET="${1:-aarch64-apple-darwin}"
-DMG_NAME="${2:-BookReader-macos-arm64-portable.dmg}"
+if [[ "$TARGET" == "aarch64-apple-darwin" ]]; then
+  DEFAULT_DMG_NAME="BookReader-macos-arm64-portable.dmg"
+else
+  DEFAULT_DMG_NAME="BookReader-macos-x64-portable.dmg"
+fi
+DMG_NAME="${2:-$DEFAULT_DMG_NAME}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

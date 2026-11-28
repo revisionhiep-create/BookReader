@@ -92,6 +92,12 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
         run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            if [[ -z "${ANDROID_KEYSTORE_BASE64:-}" || -z "${ANDROID_KEYSTORE_PASS:-}" || -z "${ANDROID_KEY_ALIAS:-}" || -z "${ANDROID_KEY_PASS:-}" ]]; then
+              echo "ERROR: Android signing secrets must all be configured for tagged release builds." >&2
+              exit 1
+            fi
+          fi
           KS_TMP=""
           cleanup_ks() { [[ -n "$KS_TMP" ]] && rm -f "$KS_TMP"; }
           trap cleanup_ks EXIT
@@ -123,6 +129,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
 

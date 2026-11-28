@@ -64,7 +64,7 @@ html[data-platform="android"] .toc-mobile-tabs {
    Compact & Medium Android (< 840px wide, or Landscape Phones <= 520px tall):
    Slim Top Bar + Slide-Over Drawer + Bottom Thumb-Zone Player Dock
    ========================================================================== */
-@media (max-width: 839px), (max-height: 520px) {
+@media (max-width: 839.98px), (max-height: 520.98px) {
   html[data-platform="android"] #toolbar-host {
     display: none;
   }
@@ -505,7 +505,7 @@ html[data-platform="android"] .toc-mobile-tabs {
 /* ==========================================================================
    Compact Phones (< 600px): Edge-to-Edge Prose, Hybrid Sheets & Full Pages
    ========================================================================== */
-@media (max-width: 599px) {
+@media (max-width: 599.98px) {
   html[data-platform="android"] .reader-viewport {
     padding: 8px var(--safe-right) calc(max(var(--dock-height, 0px), var(--safe-bottom)) + var(--cc-height, 0px) + 64px) var(--safe-left);
   }
@@ -765,12 +765,37 @@ html[data-platform="android"] .toc-mobile-tabs {
     width: 42px;
     height: 42px;
   }
+
+  html[data-platform="android"] .library-clear-all-row {
+    padding: 8px 14px;
+  }
+
+  html[data-platform="android"] .library-clear-all-row .btn-danger-outline {
+    width: 100%;
+    justify-content: center;
+    min-height: 42px;
+  }
+
+  html[data-platform="android"] .library-confirm-banner {
+    padding: 12px 14px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  html[data-platform="android"] .library-confirm-actions {
+    justify-content: flex-end;
+  }
+
+  html[data-platform="android"] .library-confirm-actions .btn-danger,
+  html[data-platform="android"] .library-confirm-actions .btn-secondary {
+    min-height: 42px;
+  }
 }
 
 /* ==========================================================================
    Medium Tier (600px - 839px, or Landscape Phones <= 520px tall)
    ========================================================================== */
-@media (min-width: 600px) and (max-width: 839px), (min-width: 600px) and (max-height: 520px) {
+@media (min-width: 600px) and (max-width: 839.98px), (min-width: 600px) and (max-height: 520.98px) {
   html[data-platform="android"] .br-prose {
     max-width: min(640px, 100%);
     padding: 26px 32px;
@@ -858,7 +883,7 @@ html[data-platform="android"] .toc-mobile-tabs {
 /* ==========================================================================
    Short-Height Landscape (<= 520px tall): Keep Maximum Reading Area
    ========================================================================== */
-@media (max-height: 520px) {
+@media (max-height: 520.98px) {
   html[data-platform="android"] .mobile-topbar {
     min-height: calc(40px + var(--safe-top));
     height: calc(40px + var(--safe-top));
@@ -908,6 +933,18 @@ html[data-platform="android"] .toc-mobile-tabs {
   html[data-platform="android"] .mobile-drawer-backdrop,
   html[data-platform="android"] .mobile-sheet-host {
     display: none !important;
+  }
+
+  html[data-platform="android"] #toolbar-host {
+    position: relative;
+  }
+
+  html[data-platform="android"] .popover {
+    top: calc(100% + 4px);
+  }
+
+  html[data-platform="android"] .search-bar {
+    top: calc(var(--safe-top) + 110px);
   }
 
   html[data-platform="android"] .sidebar {

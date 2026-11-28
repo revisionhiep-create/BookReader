@@ -94,7 +94,7 @@ impl TextPipeline {
             .unwrap(),
             // Parenthesized or bracketed kaomoji containing non-Latin glyphs or classic emote faces
             re_kaomoji_parens: Regex::new(
-                r"[(\[（【][^)\]）】\r\n]{1,42}[ノﾉ╯╰つづ⊂⊃っっಠ益ಥツ≧≦∀▽ﾟ°•̀•́｡◕ωд･ᴥ＾￣＼／┻┬︵彡✿☆♡♥♫♪][^) \]）】\r\n]{0,42}[)\]）】]",
+                r"[(\[（【][^)\]）】\r\n]{1,42}[ノﾉ╯╰つづ⊂⊃っっಠ益ಥツ≧≦∀▽ﾟ•̀•́｡◕ωд･ᴥ＾￣＼／┻┬︵彡✿☆♡♥♫♪][^) \]）】\r\n]{0,42}[)\]）】]",
             )
             .unwrap(),
             // Classic shrug / text-art faces
@@ -237,19 +237,7 @@ fn compile_user_regex(
     };
 
     let final_pat = if ignore_word_boundary || is_regex {
-        if is_regex && !ignore_word_boundary {
-            // Only add word boundaries automatically on literal edges if alphanumeric
-            let starts_word = raw.chars().next().is_some_and(is_word_char);
-            let ends_word = raw.chars().last().is_some_and(is_word_char);
-            format!(
-                "{}{}{}",
-                if starts_word { r"\b(?:" } else { "(?:" },
-                base,
-                if ends_word { r")\b" } else { ")" }
-            )
-        } else {
-            base
-        }
+        base
     } else {
         let starts_word = raw.chars().next().is_some_and(is_word_char);
         let ends_word = raw.chars().last().is_some_and(is_word_char);

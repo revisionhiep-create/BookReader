@@ -253,9 +253,9 @@ export function installPreviewMock(): void {
   const book4: BookMeta = {
     id: "preview-manual",
     title: "Magitech Architecture Reference",
-    format: "pdf",
-    stored_filename: "preview-manual.pdf",
-    original_filename: "magitech_architecture.pdf",
+    format: "docx",
+    stored_filename: "preview-manual.docx",
+    original_filename: "magitech_architecture.docx",
     added_at: 1759700000,
     last_opened_at: 1759750000,
     current_sentence_idx: 12,
@@ -421,7 +421,7 @@ export function installPreviewMock(): void {
   function buildBookPayload(book: BookMeta): DocumentPayload {
     if (book.id === book1.id) {
       const html = `
-        <h2>${escapeHtml(SAMPLE_SENTENCES_TEXT[0])}</h2>
+        <h2><span class="br-sent" data-sid="0">${escapeHtml(SAMPLE_SENTENCES_TEXT[0])}</span></h2>
         ${sentences
           .slice(1)
           .map(
@@ -684,6 +684,42 @@ export function installPreviewMock(): void {
             simWordIdx = 0;
           }
           return library as T;
+        }
+        case "delete_books": {
+          const bookIds = new Set(Array.isArray(args.bookIds) ? args.bookIds.map(String) : []);
+          library = library.filter((b) => !bookIds.has(b.id));
+          if (bookIds.has(activeBookId)) {
+            stopSim();
+            playing = false;
+            simPlaybackMs = 0;
+            simWordIdx = 0;
+          }
+          return library as T;
+        }
+        case "clear_library": {
+          library = [];
+          stopSim();
+          playing = false;
+          simPlaybackMs = 0;
+          simWordIdx = 0;
+          return library as T;
+        }
+        case "set_pdf_sentences": {
+          const bookId = String(args.bookId || "");
+          const count = Array.isArray(args.sentences) ? args.sentences.length : 0;
+          library = library.map((b) => (b.id === bookId ? { ...b, total_sentences: count } : b));
+          return null as T;
+        }
+        case "update_pdf_margins": {
+          const bookId = String(args.bookId || "");
+          const headerPct = Number(args.headerPct ?? 0.06);
+          const footerPct = Number(args.footerPct ?? 0.06);
+          library = library.map((b) =>
+            b.id === bookId
+              ? { ...b, pdf_header_ignore_pct: headerPct, pdf_footer_ignore_pct: footerPct }
+              : b,
+          );
+          return (library.find((b) => b.id === bookId) ?? book1) as T;
         }
         case "set_sleep_timer": {
           const mode = String(args.mode || "off") as SleepTimerStatus["mode"];

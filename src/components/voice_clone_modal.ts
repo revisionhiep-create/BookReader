@@ -1,7 +1,7 @@
 import { getLanguageMeta, tr } from "../i18n";
 import { invoke, openDialog } from "../tauri_bridge";
 import { Icons } from "../icons";
-import { state } from "../state";
+import { state, syncServerSettings } from "../state";
 import type {
   AudioClipProbe,
   CloneVoiceResponse,
@@ -31,9 +31,11 @@ let downloadingQwen = false;
 let cloningBusy = false;
 let switchingVariant = false;
 let previewingSlice = false;
+let probingAudio = false;
 let busyVoiceId: string | null = null;
 let cloneError = "";
 let maxQwenPct = 0;
+let statusReqSeq = 0;
 
 export function prepareVoiceCloneModalOpen(): void {
   statusRequested = false;
@@ -171,8 +173,10 @@ export function renderVoiceCloneModal(
 ): void {
   if (!statusRequested) {
     statusRequested = true;
+    const reqId = ++statusReqSeq;
     void invoke<QwenModelStatus>("get_qwen_model_status")
       .then((status) => {
+        if (reqId !== statusReqSeq) return;
         qwenStatus = status;
         if (state.bootstrap) {
           state.bootstrap.qwen_model_variant = status.active_variant;
@@ -184,6 +188,7 @@ export function renderVoiceCloneModal(
         }
       })
       .catch((err) => {
+        if (reqId !== statusReqSeq) return;
         cloneError = tr("clone_err_inspect", { error: String(err) });
         if (state.activeModal === "voice_clone") {
           renderVoiceCloneModal(container, handlers);
@@ -252,8 +257,8 @@ export function renderVoiceCloneModal(
         ${busyLock ? "disabled" : ""}
       >
         <div style="display:flex;flex-direction:column;gap:2px;min-width:0;">
-          <strong style="font-size:12.5px;">${title}</strong>
-          <span style="font-size:11px;color:var(--text-secondary);">${subtitle}</span>
+          <strong style="font-size:12.5px;">${escapeHtml(title)}</strong>
+          <span style="font-size:11px;color:var(--text-secondary);">${escapeHtml(subtitle)}</span>
         </div>
         ${pill}
       </button>
@@ -356,7 +361,7 @@ export function renderVoiceCloneModal(
                   }
                 </span>
               </div>
-              <button class="btn-secondary" id="btn-pick-clone-audio" ${!modelReady || busyLock ? "disabled" : ""}>
+              <button class="btn-secondary" id="btn-pick-clone-audio" ${!modelReady || busyLock || probingAudio ? "disabled" : ""}>
                 ${escapeHtml(tr("clone_choose_audio"))}
               </button>
             </div>
@@ -502,6 +507,9 @@ export function renderVoiceCloneModal(
   });
 
   container.querySelector("#btn-pick-clone-audio")?.addEventListener("click", async () => {
+    if (probingAudio || busyLock) return;
+    probingAudio = true;
+    rerenderIfOpen(container, handlers);
     try {
       const picked = await openDialog({
         multiple: false,
@@ -521,9 +529,10 @@ export function renderVoiceCloneModal(
       if (!draftName.trim()) {
         draftName = suggestVoiceName(probeResult.filename);
       }
-      rerenderIfOpen(container, handlers);
     } catch (err) {
       cloneError = String(err);
+    } finally {
+      probingAudio = false;
       rerenderIfOpen(container, handlers);
     }
   });
@@ -615,7 +624,11 @@ export function renderVoiceCloneModal(
         },
       });
       state.voices = res.voices;
-      qwenStatus = await invoke<QwenModelStatus>("get_qwen_model_status");
+      try {
+        qwenStatus = await invoke<QwenModelStatus>("get_qwen_model_status");
+      } catch {
+        // Ignore non-fatal status refresh failure after successful clone.
+      }
       cloningBusy = false;
       probeResult = null;
       draftName = "";
@@ -660,7 +673,8 @@ export function renderVoiceCloneModal(
       try {
         busyVoiceId = vid;
         rerenderIfOpen(container, handlers);
-        state.settings = await invoke<Settings>("select_voice", { voiceId: vid });
+        const nextSettings = await invoke<Settings>("select_voice", { voiceId: vid });
+        syncServerSettings(nextSettings);
         state.voices = await invoke<VoiceInfo[]>("list_voices");
         busyVoiceId = null;
         handlers.onChanged();
@@ -684,7 +698,7 @@ export function renderVoiceCloneModal(
           voiceId: vid,
         });
         state.voices = res.voices;
-        state.settings = res.settings;
+        syncServerSettings(res.settings);
         busyVoiceId = null;
         handlers.onChanged();
         handlers.onToast(tr("voices_toast_clone_deleted"));

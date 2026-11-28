@@ -266,47 +266,53 @@ export function renderRulesModal(
       return;
     }
 
-    if (isPron) {
-      const nextRule: PronunciationRule = {
-        id: editingId ?? crypto.randomUUID(),
-        source: pat,
-        replace: draftReplace,
-        match_case: draftMatchCase,
-        ignore_word_boundary: draftIgnoreBoundary,
-        is_regex: draftIsRegex,
-        enabled: true,
-      };
-      const updated = editingId
-        ? state.pronunciations.map((r) => (r.id === editingId ? nextRule : r))
-        : [...state.pronunciations, nextRule];
-      state.pronunciations = await invoke<PronunciationRule[]>("save_pronunciation_rules", {
-        rules: updated,
-      });
-    } else {
-      const nextRule: IgnoreRule = {
-        id: editingId ?? crypto.randomUUID(),
-        pattern: pat,
-        match_case: draftMatchCase,
-        ignore_word_boundary: draftIgnoreBoundary,
-        is_regex: draftIsRegex,
-        enabled: true,
-      };
-      const updated = editingId
-        ? state.ignoreRules.map((r) => (r.id === editingId ? nextRule : r))
-        : [...state.ignoreRules, nextRule];
-      state.ignoreRules = await invoke<IgnoreRule[]>("save_ignore_rules", {
-        rules: updated,
-      });
-    }
+    try {
+      if (isPron) {
+        const nextRule: PronunciationRule = {
+          id: editingId ?? crypto.randomUUID(),
+          source: pat,
+          replace: draftReplace,
+          match_case: draftMatchCase,
+          ignore_word_boundary: draftIgnoreBoundary,
+          is_regex: draftIsRegex,
+          enabled: true,
+        };
+        const updated = editingId
+          ? state.pronunciations.map((r) => (r.id === editingId ? nextRule : r))
+          : [...state.pronunciations, nextRule];
+        state.pronunciations = await invoke<PronunciationRule[]>("save_pronunciation_rules", {
+          rules: updated,
+        });
+      } else {
+        const nextRule: IgnoreRule = {
+          id: editingId ?? crypto.randomUUID(),
+          pattern: pat,
+          match_case: draftMatchCase,
+          ignore_word_boundary: draftIgnoreBoundary,
+          is_regex: draftIsRegex,
+          enabled: true,
+        };
+        const updated = editingId
+          ? state.ignoreRules.map((r) => (r.id === editingId ? nextRule : r))
+          : [...state.ignoreRules, nextRule];
+        state.ignoreRules = await invoke<IgnoreRule[]>("save_ignore_rules", {
+          rules: updated,
+        });
+      }
 
-    const wasEditing = editingId !== null;
-    editingId = null;
-    draftSource = "";
-    draftReplace = "";
-    validationError = "";
-    handlers.onUpdated();
-    renderRulesModal(container, mode, handlers);
-    handlers.onToast(wasEditing ? tr("rules_toast_updated") : tr("rules_toast_added"));
+      const wasEditing = editingId !== null;
+      editingId = null;
+      draftSource = "";
+      draftReplace = "";
+      validationError = "";
+      handlers.onUpdated();
+      if (state.activeModal === mode) {
+        renderRulesModal(container, mode, handlers);
+      }
+      handlers.onToast(wasEditing ? tr("rules_toast_updated") : tr("rules_toast_added"));
+    } catch (err) {
+      handlers.onToast(String(err));
+    }
   };
 
   container.querySelector("#btn-save-rule")?.addEventListener("click", () => {
@@ -324,20 +330,32 @@ export function renderRulesModal(
 
   container.querySelector("#btn-rules-delete")?.addEventListener("click", async () => {
     if (selectedIds.size === 0) return;
-    if (isPron) {
-      const filtered = state.pronunciations.filter((r) => !selectedIds.has(r.id));
-      state.pronunciations = await invoke<PronunciationRule[]>("save_pronunciation_rules", {
-        rules: filtered,
-      });
-    } else {
-      const filtered = state.ignoreRules.filter((r) => !selectedIds.has(r.id));
-      state.ignoreRules = await invoke<IgnoreRule[]>("save_ignore_rules", {
-        rules: filtered,
-      });
+    try {
+      if (isPron) {
+        const filtered = state.pronunciations.filter((r) => !selectedIds.has(r.id));
+        state.pronunciations = await invoke<PronunciationRule[]>("save_pronunciation_rules", {
+          rules: filtered,
+        });
+      } else {
+        const filtered = state.ignoreRules.filter((r) => !selectedIds.has(r.id));
+        state.ignoreRules = await invoke<IgnoreRule[]>("save_ignore_rules", {
+          rules: filtered,
+        });
+      }
+      if (editingId && selectedIds.has(editingId)) {
+        editingId = null;
+        draftSource = "";
+        draftReplace = "";
+        validationError = "";
+      }
+      selectedIds.clear();
+      handlers.onUpdated();
+      if (state.activeModal === mode) {
+        renderRulesModal(container, mode, handlers);
+      }
+    } catch (err) {
+      handlers.onToast(String(err));
     }
-    selectedIds.clear();
-    handlers.onUpdated();
-    renderRulesModal(container, mode, handlers);
   });
 
   container.querySelector("#btn-rules-export")?.addEventListener("click", async () => {
@@ -369,7 +387,9 @@ export function renderRulesModal(
       state.pronunciations = boot.pronunciations;
       state.ignoreRules = boot.ignore_rules;
       handlers.onUpdated();
-      renderRulesModal(container, mode, handlers);
+      if (state.activeModal === mode) {
+        renderRulesModal(container, mode, handlers);
+      }
       const noun = count === 1 ? tr("rules_rule_singular") : tr("rules_rule_plural");
       handlers.onToast(tr("rules_toast_imported", { count, noun }));
     } catch (err) {

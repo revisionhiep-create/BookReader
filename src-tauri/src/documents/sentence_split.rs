@@ -244,10 +244,12 @@ fn is_known_abbreviation(prefix_before_dot: &str) -> bool {
     if token.is_empty() {
         return false;
     }
-    let lower = token.to_ascii_lowercase();
-    // Single uppercase initial like "J." or "A." or dotted acronym like "U.S"
-    if (token.len() == 1 && token.chars().all(|c| c.is_ascii_uppercase()))
-        || (lower.contains('.') && lower.len() <= 7)
+    let lower = token.to_lowercase();
+    // Single uppercase initial like "J." or "A." or dotted letter acronym like "U.S"
+    if (token.chars().count() == 1 && token.chars().all(|c| c.is_ascii_uppercase()))
+        || (lower.contains('.')
+            && lower.len() <= 7
+            && lower.chars().all(|c| c == '.' || c.is_alphabetic()))
     {
         return true;
     }

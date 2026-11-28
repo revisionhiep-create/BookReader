@@ -2,7 +2,12 @@
 set -euo pipefail
 
 TARGET="${1:-aarch64-apple-darwin}"
-DMG_NAME="${2:-BookReader-macos-arm64-portable.dmg}"
+if [[ "$TARGET" == "aarch64-apple-darwin" ]]; then
+  DEFAULT_DMG_NAME="BookReader-macos-arm64-portable.dmg"
+else
+  DEFAULT_DMG_NAME="BookReader-macos-x64-portable.dmg"
+fi
+DMG_NAME="${2:-$DEFAULT_DMG_NAME}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -42,8 +47,13 @@ fi
 echo "==> 4. Testing portable folder mode + full feature self-test + live Phonon TTS synthesis"
 PORTABLE_TEST_DIR="$(mktemp -d /private/tmp/bookreader_portable_test.XXXXXX)"
 cleanup() {
-  if [[ -n "${MOUNT_POINT:-}" ]] && mount | grep -q "$MOUNT_POINT"; then
-    hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
+  if [[ -n "${MOUNT_POINT:-}" ]]; then
+    local mount_list
+    mount_list="$(mount || true)"
+    if printf '%s\n' "$mount_list" | grep -Fq "$MOUNT_POINT"; then
+      hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
+    fi
+    rmdir "$MOUNT_POINT" 2>/dev/null || true
   fi
   rm -rf "$PORTABLE_TEST_DIR"
 }

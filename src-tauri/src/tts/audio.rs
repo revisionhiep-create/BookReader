@@ -277,7 +277,24 @@ struct AudioShared {
     device_sample_rate: AtomicU32,
     output_ready: AtomicBool,
     stream_broken: AtomicBool,
+    suspend_in_flight: AtomicBool,
     last_error: Mutex<Option<String>>,
+}
+
+fn sanitize_speed(speed: f32) -> f32 {
+    if speed.is_finite() {
+        speed.clamp(0.5, 3.0)
+    } else {
+        1.0
+    }
+}
+
+fn sanitize_volume(volume: f32) -> f32 {
+    if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
 }
 
 enum AudioCommand {
@@ -303,11 +320,12 @@ impl AudioOutput {
             paused: AtomicBool::new(true),
             generation: AtomicU64::new(1),
             resume_epoch: AtomicU64::new(0),
-            volume_bits: AtomicU32::new(initial_volume.clamp(0.0, 1.0).to_bits()),
-            speed_bits: AtomicU32::new(initial_speed.clamp(0.5, 3.0).to_bits()),
+            volume_bits: AtomicU32::new(sanitize_volume(initial_volume).to_bits()),
+            speed_bits: AtomicU32::new(sanitize_speed(initial_speed).to_bits()),
             device_sample_rate: AtomicU32::new(48_000),
             output_ready: AtomicBool::new(false),
             stream_broken: AtomicBool::new(false),
+            suspend_in_flight: AtomicBool::new(false),
             last_error: Mutex::new(None),
         });
 
@@ -341,11 +359,12 @@ impl AudioOutput {
                 paused: AtomicBool::new(true),
                 generation: AtomicU64::new(1),
                 resume_epoch: AtomicU64::new(0),
-                volume_bits: AtomicU32::new(initial_volume.clamp(0.0, 1.0).to_bits()),
-                speed_bits: AtomicU32::new(initial_speed.clamp(0.5, 3.0).to_bits()),
+                volume_bits: AtomicU32::new(sanitize_volume(initial_volume).to_bits()),
+                speed_bits: AtomicU32::new(sanitize_speed(initial_speed).to_bits()),
                 device_sample_rate: AtomicU32::new(48_000),
                 output_ready: AtomicBool::new(false),
                 stream_broken: AtomicBool::new(false),
+                suspend_in_flight: AtomicBool::new(false),
                 last_error: Mutex::new(None),
             }),
             stretcher: WsolaStretcher::new(MODEL_SAMPLE_RATE),
@@ -362,7 +381,7 @@ impl AudioOutput {
     /// or recreating a stream that was closed on pause / invalidated by the OS audio server.
     pub fn ensure_stream_ready(&self) -> Result<(), String> {
         self.shared.resume_epoch.fetch_add(1, Ordering::AcqRel);
-        if self.is_output_ready() {
+        if !self.shared.suspend_in_flight.load(Ordering::Acquire) && self.is_output_ready() {
             return Ok(());
         }
         let Some(ref tx) = self.cmd_tx else {
@@ -387,7 +406,10 @@ impl AudioOutput {
     pub fn suspend_if_paused(&self) {
         if let Some(ref tx) = self.cmd_tx {
             let epoch = self.shared.resume_epoch.load(Ordering::Acquire);
-            let _ = tx.try_send(AudioCommand::SuspendIfPaused(epoch));
+            self.shared.suspend_in_flight.store(true, Ordering::Release);
+            if tx.try_send(AudioCommand::SuspendIfPaused(epoch)).is_err() {
+                self.shared.suspend_in_flight.store(false, Ordering::Release);
+            }
         }
     }
 
@@ -419,12 +441,12 @@ impl AudioOutput {
     pub fn set_volume(&self, volume: f32) {
         self.shared
             .volume_bits
-            .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Release);
+            .store(sanitize_volume(volume).to_bits(), Ordering::Release);
     }
 
     /// Updates playback speed and live-stretches currently buffered speech smoothly.
     pub fn set_speed(&self, new_speed: f32) {
-        let clamped = new_speed.clamp(0.5, 3.0);
+        let clamped = sanitize_speed(new_speed);
         self.shared.speed_bits.store(clamped.to_bits(), Ordering::Release);
         let was_paused = self.shared.paused.load(Ordering::Acquire);
 
@@ -641,10 +663,11 @@ fn run_audio_thread(
                     && shared.resume_epoch.load(Ordering::Acquire) == epoch
                     && active_stream.is_some()
                 {
-                    active_stream = None;
                     shared.output_ready.store(false, Ordering::Release);
                     shared.stream_broken.store(false, Ordering::Release);
+                    active_stream = None;
                 }
+                shared.suspend_in_flight.store(false, Ordering::Release);
             }
         }
     }
@@ -759,7 +782,12 @@ fn fill_output_buffer<T>(
             break;
         }
 
-        let sample = T::from_sample(mono.clamp(-1.0, 1.0));
+        let clamped_mono = if mono.is_finite() {
+            mono.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let sample = T::from_sample(clamped_mono);
         for ch in frame.iter_mut() {
             *ch = sample;
         }

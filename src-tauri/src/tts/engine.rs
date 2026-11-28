@@ -153,9 +153,14 @@ impl PhononEngine {
             return self.pocket.synthesize(paths, lang, slug, text);
         }
 
-        let active_voice = self
-            .ensure_voice_registered(paths, voice_id)
-            .unwrap_or_else(|_| "default".to_string());
+        self.ensure_loaded(paths)?;
+        let active_voice = match self.ensure_voice_registered(paths, voice_id) {
+            Ok(v) => v,
+            Err(err) => {
+                tracing::warn!(voice_id = %voice_id, error = %err, "Falling back to default Phonon voice");
+                "default".to_string()
+            }
+        };
 
         let guard = self.synth.read().unwrap();
         let synth = guard.as_ref().ok_or("Phonon engine is not loaded")?;

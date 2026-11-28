@@ -71,8 +71,37 @@ impl ExportManager {
         is_exporting_cloned_voice_in(&self.active)
     }
 
+    pub fn is_exporting_phonon(&self) -> bool {
+        self.active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|existing| {
+                !AppPaths::is_cloned_voice_id(&existing.voice_id)
+                    && AppPaths::parse_pocket_voice_id(&existing.voice_id).is_none()
+                    && matches!(
+                        existing.latest.status.as_str(),
+                        "preparing" | "running" | "finalizing"
+                    )
+            })
+    }
+
+    pub fn is_exporting_pocket(&self) -> bool {
+        self.active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|existing| {
+                AppPaths::parse_pocket_voice_id(&existing.voice_id).is_some()
+                    && matches!(
+                        existing.latest.status.as_str(),
+                        "preparing" | "running" | "finalizing"
+                    )
+            })
+    }
+
     pub fn cancel(&self) -> Result<(), String> {
-        let guard = self.active.lock().unwrap();
+        let guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(job) = guard.as_ref() {
             job.cancel.store(true, Ordering::Release);
             Ok(())
@@ -82,18 +111,6 @@ impl ExportManager {
     }
 
     pub fn start_export(&self, app: AppHandle, req: ExportRequest) -> Result<String, String> {
-        {
-            let guard = self.active.lock().unwrap();
-            if let Some(existing) = guard.as_ref()
-                && matches!(
-                    existing.latest.status.as_str(),
-                    "preparing" | "running" | "finalizing"
-                )
-            {
-                return Err("Another audio export is already in progress".to_string());
-            }
-        }
-
         if req.sentences.is_empty() {
             return Err("No sentences available to export".to_string());
         }
@@ -129,7 +146,15 @@ impl ExportManager {
         };
 
         {
-            let mut guard = self.active.lock().unwrap();
+            let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(existing) = guard.as_ref()
+                && matches!(
+                    existing.latest.status.as_str(),
+                    "preparing" | "running" | "finalizing"
+                )
+            {
+                return Err("Another audio export is already in progress".to_string());
+            }
             *guard = Some(ActiveExport {
                 job_id: job_id.clone(),
                 voice_id: req.voice_id.clone(),
@@ -143,13 +168,29 @@ impl ExportManager {
         let engine = Arc::clone(&self.engine);
         let active_ref = Arc::clone(&self.active);
         let ret_job_id = job_id.clone();
+        let worker_app = app.clone();
 
-        std::thread::Builder::new()
+        if let Err(e) = std::thread::Builder::new()
             .name("bookreader-export".to_string())
             .spawn(move || {
-                run_export_worker(app, storage, engine, active_ref, job_id, cancel, req, slice);
+                run_export_worker(worker_app, storage, engine, active_ref, job_id, cancel, req, slice);
             })
-            .map_err(|e| format!("Failed starting export thread: {e}"))?;
+        {
+            let mut err_evt = initial;
+            err_evt.status = "error".to_string();
+            err_evt.error = Some(format!("Failed starting export thread: {e}"));
+            if let Some(slot) = self
+                .active
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+                && slot.job_id == ret_job_id
+            {
+                slot.latest = err_evt.clone();
+            }
+            let _ = app.emit("export:progress", &err_evt);
+            return Err(format!("Failed starting export thread: {e}"));
+        }
 
         Ok(ret_job_id)
     }
@@ -177,6 +218,42 @@ fn maybe_unload_qwen_if_unused(
     }
 }
 
+struct ExportWorkerGuard {
+    app: AppHandle,
+    storage: Arc<Storage>,
+    engine: Arc<PhononEngine>,
+    active_ref: Arc<Mutex<Option<ActiveExport>>>,
+    job_id: String,
+    was_cloned_export: bool,
+}
+
+impl Drop for ExportWorkerGuard {
+    fn drop(&mut self) {
+        let mut fallback_evt: Option<ExportProgressEvent> = None;
+        if let Some(slot) = self
+            .active_ref
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+            && slot.job_id == self.job_id
+            && matches!(
+                slot.latest.status.as_str(),
+                "preparing" | "running" | "finalizing"
+            )
+        {
+            slot.latest.status = "error".to_string();
+            slot.latest.error = Some("Audio export terminated unexpectedly".to_string());
+            fallback_evt = Some(slot.latest.clone());
+        }
+        if let Some(evt) = fallback_evt {
+            let _ = self.app.emit("export:progress", &evt);
+        }
+        if self.was_cloned_export {
+            maybe_unload_qwen_if_unused(&self.storage, &self.engine, &self.active_ref);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_export_worker(
     app: AppHandle,
@@ -188,20 +265,24 @@ fn run_export_worker(
     req: ExportRequest,
     sentences: Vec<SentenceItem>,
 ) {
-    let was_cloned_export = AppPaths::is_cloned_voice_id(&req.voice_id);
+    let _guard = ExportWorkerGuard {
+        app: app.clone(),
+        storage: Arc::clone(&storage),
+        engine: Arc::clone(&engine),
+        active_ref: Arc::clone(&active_ref),
+        job_id: job_id.clone(),
+        was_cloned_export: AppPaths::is_cloned_voice_id(&req.voice_id),
+    };
     run_export_worker_inner(
         app,
-        Arc::clone(&storage),
-        Arc::clone(&engine),
-        Arc::clone(&active_ref),
+        storage,
+        engine,
+        active_ref,
         job_id,
         cancel,
         req,
         sentences,
     );
-    if was_cloned_export {
-        maybe_unload_qwen_if_unused(&storage, &engine, &active_ref);
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -282,9 +363,20 @@ fn run_export_worker_inner(
         return;
     }
 
-    let mut sink = match AudioExportSink::create(req.format, out_path, &req.book_title) {
+    let tmp_name = format!(
+        "{}.{}.part",
+        out_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("export"),
+        job_id
+    );
+    let tmp_path = out_path.with_file_name(tmp_name);
+
+    let mut sink = match AudioExportSink::create(req.format, &tmp_path, &req.book_title) {
         Ok(s) => s,
         Err(err) => {
+            let _ = std::fs::remove_file(&tmp_path);
             emit_state("error", 0, None, 0.0, 0, Some(err));
             return;
         }
@@ -296,13 +388,17 @@ fn run_export_worker_inner(
         &storage.pronunciations(),
     );
     let stretcher = WsolaStretcher::new(MODEL_SAMPLE_RATE);
-    let speed = req.speed.clamp(0.5, 3.0);
+    let speed = if req.speed.is_finite() {
+        req.speed.clamp(0.5, 3.0)
+    } else {
+        1.0
+    };
     let mut total_audio_samples: u64 = 0;
 
     for (idx, sent) in sentences.iter().enumerate() {
         if cancel.load(Ordering::Acquire) {
             drop(sink);
-            let _ = std::fs::remove_file(out_path);
+            let _ = std::fs::remove_file(&tmp_path);
             emit_state("cancelled", idx, None, 0.0, 0, None);
             return;
         }
@@ -339,7 +435,7 @@ fn run_export_worker_inner(
                     }
                     Err(err) => {
                         drop(sink);
-                        let _ = std::fs::remove_file(out_path);
+                        let _ = std::fs::remove_file(&tmp_path);
                         emit_state("error", idx, None, 0.0, 0, Some(err));
                         return;
                     }
@@ -349,7 +445,7 @@ fn run_export_worker_inner(
 
         if let Err(err) = sink.write_f32_chunk(&speech_pcm) {
             drop(sink);
-            let _ = std::fs::remove_file(out_path);
+            let _ = std::fs::remove_file(&tmp_path);
             emit_state("error", idx, None, 0.0, 0, Some(err));
             return;
         }
@@ -360,7 +456,7 @@ fn run_export_worker_inner(
         if pause_samples > 0 {
             if let Err(err) = sink.write_silence(pause_samples) {
                 drop(sink);
-                let _ = std::fs::remove_file(out_path);
+                let _ = std::fs::remove_file(&tmp_path);
                 emit_state("error", idx, None, 0.0, 0, Some(err));
                 return;
             }
@@ -377,14 +473,27 @@ fn run_export_worker_inner(
         } else {
             Some(0.0)
         };
-        let bytes = std::fs::metadata(out_path).map(|m| m.len()).unwrap_or(0);
+        let bytes = std::fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
         emit_state("running", done, eta, rt, bytes, None);
     }
 
     emit_state("finalizing", total, Some(0.0), 0.0, 0, None);
     if let Err(err) = sink.finish() {
-        let _ = std::fs::remove_file(out_path);
+        let _ = std::fs::remove_file(&tmp_path);
         emit_state("error", total, None, 0.0, 0, Some(err));
+        return;
+    }
+
+    if let Err(err) = std::fs::rename(&tmp_path, out_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        emit_state(
+            "error",
+            total,
+            None,
+            0.0,
+            0,
+            Some(format!("Failed moving exported audio to destination: {err}")),
+        );
         return;
     }
 

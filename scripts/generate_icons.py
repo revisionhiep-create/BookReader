@@ -1,159 +1,179 @@
-"""Generate neutral BookReader app & taskbar icons (open book + sound waves)."""
+"""Generate official BookReader closed-book + cyan-spark icons for Windows, macOS, Android, and Web UI."""
 
 from pathlib import Path
-from PIL import Image, ImageDraw
+import json
+import numpy as np
+from PIL import Image, ImageDraw, ImageEnhance
 
-OUT_DIR = Path(__file__).resolve().parent.parent / "src-tauri" / "icons"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ICONS_DIR = REPO_ROOT / "src-tauri" / "icons"
+MASTER_PATH = ICONS_DIR / "icon_master.png"
+WEB_ICON_PATH = REPO_ROOT / "src" / "assets" / "app-icon.png"
+
+BG_RGB = (18, 18, 17)  # #121211 (--bg-app)
+RIM_BORDER_RGBA = (42, 60, 72, 255)  # Subtle dark cyan-slate squircle edge
 
 
-def render_icon(size: int) -> Image.Image:
-    # Supersample 4x for crisp anti-aliased lines and curves
-    scale = 4
-    w = size * scale
-    img = Image.new("RGBA", (w, w), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+def extract_book_crop(master: Image.Image) -> tuple[Image.Image, Image.Image]:
+    """Tightly crop the book + bookmark + glowing spark, returning (#121211-blended RGB, feathered RGBA)."""
+    arr = np.array(master.convert("RGB"), dtype=np.float32)
+    h, w = arr.shape[:2]
 
-    # Neutral dark charcoal squircle background with subtle stone border
-    pad = int(w * 0.05)
-    radius = int(w * 0.22)
+    # Measure background color from outer border strips of master
+    border_samples = np.concatenate(
+        [
+            arr[0:max(1, h // 40), :, :].reshape(-1, 3),
+            arr[h - max(1, h // 40) : h, :, :].reshape(-1, 3),
+            arr[:, 0:max(1, w // 40), :].reshape(-1, 3),
+            arr[:, w - max(1, w // 40) : w, :].reshape(-1, 3),
+        ],
+        axis=0,
+    )
+    measured_bg = np.median(border_samples, axis=0).astype(np.float32)
+    target_bg = np.array(BG_RGB, dtype=np.float32)
+
+    diff = np.max(np.abs(arr - measured_bg), axis=2)
+    ys, xs = np.where(diff > 18.0)
+    if xs.size == 0 or ys.size == 0:
+        x_min, x_max, y_min, y_max = 0, w - 1, 0, h - 1
+    else:
+        x_min, x_max = int(xs.min()), int(xs.max())
+        y_min, y_max = int(ys.min()), int(ys.max())
+    cx = (x_min + x_max) / 2.0
+    cy = (y_min + y_max) / 2.0
+    span = max(x_max - x_min + 1, y_max - y_min + 1)
+    side = max(1, int(round(span * 1.14)))
+    half = side // 2
+
+    # Sample crop onto a square canvas padded with measured_bg so non-square masters never clip
+    raw_x0 = int(round(cx)) - half
+    raw_y0 = int(round(cy)) - half
+    raw_x1 = raw_x0 + side
+    raw_y1 = raw_y0 + side
+
+    crop = np.broadcast_to(measured_bg, (side, side, 3)).copy()
+    src_x0 = max(0, raw_x0)
+    src_y0 = max(0, raw_y0)
+    src_x1 = min(w, raw_x1)
+    src_y1 = min(h, raw_y1)
+    if src_x1 > src_x0 and src_y1 > src_y0:
+        dst_x0 = src_x0 - raw_x0
+        dst_y0 = src_y0 - raw_y0
+        crop[dst_y0 : dst_y0 + (src_y1 - src_y0), dst_x0 : dst_x0 + (src_x1 - src_x0)] = arr[
+            src_y0:src_y1, src_x0:src_x1
+        ]
+    ch, cw = crop.shape[:2]
+
+    # Smooth radial edge blend to exact #121211 near the crop border
+    yy, xx = np.mgrid[0:ch, 0:cw]
+    dist_edge = np.minimum(np.minimum(xx, cw - 1 - xx), np.minimum(yy, ch - 1 - yy))
+    edge_t = np.clip(dist_edge / max(1.0, cw * 0.08), 0.0, 1.0)
+    edge_t = edge_t * edge_t * (3.0 - 2.0 * edge_t)
+
+    # Smoothstep foreground alpha based on perceptual distance from measured background
+    color_dist = np.linalg.norm(crop - measured_bg, axis=2)
+    fg_raw = np.clip((color_dist - 8.0) / 18.0, 0.0, 1.0)
+    fg_alpha = fg_raw * fg_raw * (3.0 - 2.0 * fg_raw) * edge_t
+
+    rgb_blended = crop * edge_t[:, :, None] + target_bg * (1.0 - edge_t[:, :, None])
+    rgb_im = Image.fromarray(np.clip(np.round(rgb_blended), 0, 255).astype(np.uint8), mode="RGB")
+
+    rgba_arr = np.zeros((ch, cw, 4), dtype=np.uint8)
+    rgba_arr[:, :, :3] = np.clip(np.round(crop), 0, 255).astype(np.uint8)
+    rgba_arr[:, :, 3] = np.clip(np.round(fg_alpha * 255.0), 0, 255).astype(np.uint8)
+    fg_im = Image.fromarray(rgba_arr, mode="RGBA")
+    return rgb_im, fg_im
+
+
+def render_squircle_icon(cropped_rgb: Image.Image, size: int, sharpen_small: bool = False) -> Image.Image:
+    """Render tightly-cropped closed book + spark inside a crisp #121211 rounded squircle."""
+    base = 1024
+    canvas = Image.new("RGBA", (base, base), (0, 0, 0, 0))
+
+    # Rounded squircle clip mask
+    pad = int(round(base * 0.02))
+    radius = int(round(base * 0.22))
+    mask = Image.new("L", (base, base), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([pad, pad, base - pad, base - pad], radius=radius, fill=255)
+
+    # Solid #121211 interior with tight artwork filling ~92% of squircle width
+    sq_bg = Image.new("RGBA", (base, base), (*BG_RGB, 255))
+    art_size = int(round(base * 0.90))
+    art = cropped_rgb.resize((art_size, art_size), Image.Resampling.LANCZOS).convert("RGBA")
+    offset = (base - art_size) // 2
+    sq_bg.alpha_composite(art, dest=(offset, offset))
+
+    canvas.paste(sq_bg, (0, 0), mask)
+    draw = ImageDraw.Draw(canvas)
     draw.rounded_rectangle(
-        [pad, pad, w - pad, w - pad],
+        [pad, pad, base - pad, base - pad],
         radius=radius,
-        fill=(34, 34, 32, 255),
-        outline=(68, 69, 65, 255),
-        width=max(2, int(w * 0.014)),
+        outline=RIM_BORDER_RGBA,
+        width=max(2, int(round(base * 0.010))),
     )
 
-    # Subtle inner highlight ring
-    inner_pad = pad + max(2, int(w * 0.018))
-    draw.rounded_rectangle(
-        [inner_pad, inner_pad, w - inner_pad, w - inner_pad],
-        radius=max(4, radius - int(w * 0.018)),
-        outline=(48, 49, 46, 200),
-        width=max(1, int(w * 0.008)),
-    )
+    if size == base:
+        return canvas
+    out = canvas.resize((size, size), Image.Resampling.LANCZOS)
+    if sharpen_small and size <= 32:
+        out = ImageEnhance.Sharpness(out).enhance(1.25)
+    return out
 
-    cx = w * 0.50
 
-    # Three neutral sound wave arcs emanating upward from the open book spine
-    wave_cy = w * 0.43
-    wave_specs = [
-        (0.14, (190, 193, 184, 240), 0.036),
-        (0.225, (148, 152, 143, 225), 0.033),
-        (0.31, (108, 112, 104, 200), 0.030),
-    ]
-    for r_frac, color, width_frac in wave_specs:
-        r = w * r_frac
-        stroke = max(2, int(w * width_frac))
-        bbox = [cx - r, wave_cy - r, cx + r, wave_cy + r]
-        draw.arc(bbox, start=218, end=322, fill=color, width=stroke)
-
-    # Open book silhouette in warm neutral stone (#E5E5E0)
-    # Left & right open pages angled upward cleanly toward center spine
-    book_top_y = w * 0.50
-    book_bot_y = w * 0.77
-    spine_dip_y = w * 0.54
-    spine_bot_y = w * 0.805
-    left_x = w * 0.20
-    right_x = w * 0.80
-    spine_gap = w * 0.016
-
-    page_fill = (229, 229, 224, 255)
-    page_shade = (196, 197, 190, 255)
-    cover_color = (142, 145, 138, 255)
-    line_color = (118, 120, 114, 210)
-
-    # Subtle outer cover cradle underneath pages
-    cover_pad_x = w * 0.028
-    cover_pad_y = w * 0.030
-    draw.polygon(
-        [
-            (left_x - cover_pad_x, book_top_y + cover_pad_y * 0.9),
-            (cx, spine_dip_y + cover_pad_y * 1.15),
-            (right_x + cover_pad_x, book_top_y + cover_pad_y * 0.9),
-            (right_x + cover_pad_x, book_bot_y + cover_pad_y),
-            (cx, spine_bot_y + cover_pad_y * 1.15),
-            (left_x - cover_pad_x, book_bot_y + cover_pad_y),
-        ],
-        fill=cover_color,
-    )
-
-    # Left page
-    draw.polygon(
-        [
-            (left_x, book_top_y),
-            (cx - spine_gap, spine_dip_y),
-            (cx - spine_gap, spine_bot_y),
-            (left_x, book_bot_y),
-        ],
-        fill=page_fill,
-    )
-
-    # Right page (slightly softer stone tone for subtle depth)
-    draw.polygon(
-        [
-            (cx + spine_gap, spine_dip_y),
-            (right_x, book_top_y),
-            (right_x, book_bot_y),
-            (cx + spine_gap, spine_bot_y),
-        ],
-        fill=page_shade,
-    )
-
-    # Spine crease accent
-    draw.line(
-        [(cx, spine_dip_y), (cx, spine_bot_y)],
-        fill=(64, 65, 61, 255),
-        width=max(2, int(w * 0.014)),
-    )
-
-    # Subtle text lines on pages (only drawn cleanly when icon >= 24px equivalent)
-    if size >= 24:
-        line_w = max(2, int(w * 0.016))
-        for i in range(3):
-            t = 0.28 + i * 0.24
-            ly_outer = book_top_y + (book_bot_y - book_top_y) * t
-            ly_inner = spine_dip_y + (spine_bot_y - spine_dip_y) * t
-            lx1 = left_x + (cx - spine_gap - left_x) * 0.18
-            lx2 = left_x + (cx - spine_gap - left_x) * 0.80
-            draw.line(
-                [
-                    (lx1, ly_outer + (ly_inner - ly_outer) * 0.18),
-                    (lx2, ly_outer + (ly_inner - ly_outer) * 0.80),
-                ],
-                fill=line_color,
-                width=line_w,
-            )
-            rx1 = cx + spine_gap + (right_x - (cx + spine_gap)) * 0.20
-            rx2 = cx + spine_gap + (right_x - (cx + spine_gap)) * 0.82
-            draw.line(
-                [
-                    (rx1, ly_inner + (ly_outer - ly_inner) * 0.20),
-                    (rx2, ly_inner + (ly_outer - ly_inner) * 0.82),
-                ],
-                fill=line_color,
-                width=line_w,
-            )
-
-    return img.resize((size, size), Image.Resampling.LANCZOS)
+def render_android_adaptive(cropped_fg: Image.Image) -> tuple[Image.Image, Image.Image]:
+    """Generate 1024x1024 solid #121211 background + safe-zone foreground for Android."""
+    size = 1024
+    bg = Image.new("RGBA", (size, size), (*BG_RGB, 255))
+    fg = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    art_size = int(round(size * 0.66))
+    art = cropped_fg.resize((art_size, art_size), Image.Resampling.LANCZOS)
+    offset = (size - art_size) // 2
+    fg.alpha_composite(art, dest=(offset, offset))
+    return bg, fg
 
 
 def main() -> None:
-    render_icon(32).save(OUT_DIR / "32x32.png", format="PNG")
-    render_icon(128).save(OUT_DIR / "128x128.png", format="PNG")
-    render_icon(256).save(OUT_DIR / "128x128@2x.png", format="PNG")
-    icon_512 = render_icon(512)
-    icon_512.save(OUT_DIR / "icon.png", format="PNG")
+    if not MASTER_PATH.exists():
+        raise FileNotFoundError(f"Missing master artwork: {MASTER_PATH}")
 
-    # Multi-resolution Windows .ico for crisp taskbar, Alt+Tab, and Explorer rendering
-    ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    icon_512.save(OUT_DIR / "icon.ico", format="ICO", sizes=ico_sizes)
+    ICONS_DIR.mkdir(parents=True, exist_ok=True)
+    WEB_ICON_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Multi-resolution macOS .icns from 1024x1024 master
-    icon_1024 = render_icon(1024)
-    icon_1024.save(OUT_DIR / "icon.icns", format="ICNS")
-    print(f"Generated icons in {OUT_DIR}")
+    master = Image.open(MASTER_PATH)
+    cropped_rgb, cropped_fg = extract_book_crop(master)
+
+    icon_1024 = render_squircle_icon(cropped_rgb, 1024)
+    icon_1024.save(ICONS_DIR / "icon.png", format="PNG")
+
+    render_squircle_icon(cropped_rgb, 32, sharpen_small=True).save(ICONS_DIR / "32x32.png", format="PNG")
+    render_squircle_icon(cropped_rgb, 128).save(ICONS_DIR / "128x128.png", format="PNG")
+    icon_256 = render_squircle_icon(cropped_rgb, 256)
+    icon_256.save(ICONS_DIR / "128x128@2x.png", format="PNG")
+    icon_256.save(WEB_ICON_PATH, format="PNG")
+
+    ico_sizes = [16, 24, 32, 48, 64, 128, 256]
+    ico_frames = [render_squircle_icon(cropped_rgb, s, sharpen_small=(s <= 32)) for s in ico_sizes]
+    ico_frames[-1].save(
+        ICONS_DIR / "icon.ico",
+        format="ICO",
+        append_images=ico_frames[:-1],
+    )
+
+    icon_1024.save(ICONS_DIR / "icon.icns", format="ICNS")
+
+    android_bg, android_fg = render_android_adaptive(cropped_fg)
+    android_bg.save(ICONS_DIR / "android-bg.png", format="PNG")
+    android_fg.save(ICONS_DIR / "android-fg.png", format="PNG")
+
+    manifest = {
+        "default": "icon.png",
+        "bg_color": "#121211",
+        "android_bg": "android-bg.png",
+        "android_fg": "android-fg.png",
+        "android_fg_scale": 100,
+    }
+    (ICONS_DIR / "icon-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"Generated closed-book icons in {ICONS_DIR} and {WEB_ICON_PATH}")
 
 
 if __name__ == "__main__":

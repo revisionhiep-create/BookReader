@@ -134,7 +134,7 @@ export function detectSystemLanguage(): AppLanguage {
     candidates.push(navigator.language);
   }
   for (const raw of candidates) {
-    const prefix = raw.trim().toLowerCase().slice(0, 2);
+    const prefix = raw.trim().toLowerCase().split(/[-_]/)[0] ?? "";
     if (isSupportedLanguage(prefix)) {
       return prefix;
     }

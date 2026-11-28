@@ -747,12 +747,15 @@ pub fn slice_and_normalize_reference(
     if slice.len() < (sample_rate as usize * 3).saturating_sub(240) {
         return Err("Reference audio has fewer than 3 seconds of samples.".to_string());
     }
+    if slice.iter().any(|s| !s.is_finite()) {
+        return Err("Reference audio contains invalid non-finite samples.".to_string());
+    }
 
     let mean = slice.iter().map(|&s| f64::from(s)).sum::<f64>() / slice.len() as f64;
     let mut out: Vec<f32> = slice.iter().map(|&s| (f64::from(s) - mean) as f32).collect();
 
     let peak = out.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
-    if peak < 1e-4 {
+    if !peak.is_finite() || peak < 1e-4 {
         return Err("Reference audio is silent. Please pick a clip with clear speech.".to_string());
     }
 

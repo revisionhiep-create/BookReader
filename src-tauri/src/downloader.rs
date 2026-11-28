@@ -156,7 +156,8 @@ impl DownloadManager {
         #[allow(unused_mut)]
         let mut builder = reqwest::Client::builder()
             .user_agent("BookReader/1.0")
-            .connect_timeout(std::time::Duration::from_secs(20));
+            .connect_timeout(std::time::Duration::from_secs(20))
+            .read_timeout(std::time::Duration::from_secs(30));
 
         #[cfg(target_os = "android")]
         {
@@ -453,7 +454,7 @@ impl DownloadManager {
                         current_file: (*rel_path).to_string(),
                         bytes_done: cum_done,
                         bytes_total: Some(cum_total),
-                        files_done: idx,
+                        files_done: idx + 1,
                         files_total: total_files,
                         done: false,
                         error: None,
@@ -809,10 +810,25 @@ impl DownloadManager {
             }
         }
 
-        file.flush()
-            .await
-            .map_err(|e| format!("Flush error for {label}: {e}"))?;
+        if let Err(e) = file.flush().await {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(format!("Flush error for {label}: {e}"));
+        }
         drop(file);
+
+        if bytes_done == 0 {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(format!("Downloaded file {label} was empty"));
+        }
+        if let Some(expected) = total_bytes
+            && bytes_done != expected
+        {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(format!(
+                "Incomplete download for {label}: received {bytes_done} of {expected} bytes"
+            ));
+        }
 
         std::fs::rename(&part, dest).map_err(|e| {
             let _ = std::fs::remove_file(&part);
@@ -822,7 +838,7 @@ impl DownloadManager {
         let (emit_done, emit_total, emit_files_done) = if let Some(t) = tracker.as_deref_mut() {
             t.mark_file_done(file_idx, bytes_done);
             let (d, tot) = t.snapshot(0);
-            (d, Some(tot), file_idx)
+            (d, Some(tot), file_idx + 1)
         } else {
             (bytes_done, total_bytes.or(Some(bytes_done)), file_idx + 1)
         };

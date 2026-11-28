@@ -39,7 +39,11 @@ impl WsolaStretcher {
     /// returning `(stretched_pcm, source_sample_map)` where `source_sample_map[i]`
     /// is the 24 kHz source sample index corresponding to `stretched_pcm[i]`.
     pub fn stretch(&self, input: &[f32], speed: f32) -> (Vec<f32>, Vec<usize>) {
-        let speed = speed.clamp(0.5, 3.0);
+        let speed = if speed.is_finite() {
+            speed.clamp(0.5, 3.0)
+        } else {
+            1.0
+        };
         if input.is_empty() {
             return (Vec::new(), Vec::new());
         }
