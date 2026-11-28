@@ -1,6 +1,6 @@
 [package]
 name = "bookreader"
-version = "1.2.0"
+version = "1.2.1"
 description = "Self-contained TTS reader powered by Gradium Phonon 31M & Kyutai Pocket TTS"
 authors = ["BookReader"]
 edition = "2024"
